@@ -5,7 +5,8 @@
     "require": {
         "php": "^8.2",
         "ext-curl": "*",
-        "ext-json": "*"
+        "ext-json": "*",
+        "chrome-php/chrome": "^1.16"
     },
     "autoload": {
         "psr-4": {

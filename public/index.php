@@ -14,6 +14,10 @@ $provider = $_POST['provider'] ?? 'balad';
 if ($route === '/search_place' || $route === '/') {
     if ($provider === 'neshan') {
         require_once __DIR__ . '/../src/Controller/NeshanController.php';
+    } elseif ($provider === 'google_map') {
+        require_once __DIR__ . '/../src/Controller/GoogleMapController.php';
+    } elseif ($provider === 'divar') {
+        require_once __DIR__ . '/../src/Controller/DivarController.php';
     } else {
         require_once __DIR__ . '/../src/Controller/BaladController.php';
     }

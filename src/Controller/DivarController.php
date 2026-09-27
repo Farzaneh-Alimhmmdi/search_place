@@ -6,28 +6,32 @@ use Src\Support\Config;
 use Src\Support\Db;
 use Src\Support\Logger;
 use Src\Http\CurlHttpClient;
-use Src\Balad\BaladClient;
-use Src\Balad\BaladSearchService;
+use Src\Divar\DivarClient;
+use Src\Divar\DivarSearchService;
 use Src\View\SearchView;
 
-final class BaladController
+final class DivarController
 {
     private CurlHttpClient $http;
-    private BaladClient $client;
-    private BaladSearchService $service;
+    private DivarClient $client;
+    private DivarSearchService $service;
 
     private array $provinces = [];
     private array $citySlugs = [];
-    private array $categories = [];
+    private array $cities = [];
+    private array $divarCategories = [];
 
+    private string $selectedProvince = '';
     private string $selectedCity = '';
-    private string $selectedCategory = 'guest-house';
+    private string $selectedCategory = 'rent-temporary';
+    private string $selectedQuery = '';
     private ?array $results = null;
     private ?string $error = null;
+    private array $existingCallLogs = [];
 
     public function run(): void
     {
-        Config::load(__DIR__ . '/../../config/balad.php');
+        Config::load(__DIR__ . '/../../config/divar.php');
         Db::connect(
             Config::get('db_host', '127.0.0.1'),
             Config::get('db_port', 3306),
@@ -53,12 +57,14 @@ final class BaladController
             'request_delay' => Config::get('request_delay'),
         ]);
 
-        $this->client = new BaladClient(
+        $this->client = new DivarClient(
             $this->http,
-            Config::get('base_url'),
-            Config::get('preview_bulk_url')
+            Config::get('endpoint'),
+            Config::get('categories'),
+            Config::get('user_agent'),
+            Config::get('city_slugs')
         );
-        $this->service = new BaladSearchService($this->client);
+        $this->service = new DivarSearchService($this->client);
     }
 
     private function loadData(): void
@@ -66,15 +72,19 @@ final class BaladController
         $root = dirname(__DIR__, 2);
         $this->provinces = json_decode(file_get_contents($root . '/provinces.json'), true) ?? [];
         $this->citySlugs = Config::get('city_slugs');
-        $this->categories = require $root . '/config/categories.php';
+        $this->divarCategories = Config::get('categories');
+        $this->cities = json_decode(file_get_contents(Config::get('cities_file')), true) ?? [];
     }
 
     private function handleRequest(): void
     {
+        $this->selectedProvince = $_POST['province'] ?? '';
         $this->selectedCity = $_POST['city'] ?? '';
-        $this->selectedCategory = $_POST['place'] ?? 'guest-house';
+        $this->selectedCategory = $_POST['place'] ?? 'rent-temporary';
+        $this->selectedQuery = $_POST['query'] ?? '';
         $this->results = null;
         $this->error = null;
+        $this->existingCallLogs = [];
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // Handle call logging (AJAX)
@@ -90,23 +100,12 @@ final class BaladController
             }
 
             if ($this->selectedCity) {
-                $citySlug = $this->citySlugs[$this->selectedCity] ?? '';
-
-                if ($citySlug === '') {
-                    foreach ($this->provinces as $prov) {
-                        if (($prov['name'] ?? '') === $this->selectedCity && !empty($prov['slug'])) {
-                            $citySlug = $prov['slug'];
-                            break;
-                        }
-                    }
-                }
-
-                if ($citySlug === '') {
-                    $citySlug = rawurlencode($this->selectedCity);
-                }
+                // Get Divar city slug from our cities mapping
+                $cityInfo = $this->cities[$this->selectedCity] ?? null;
+                $divarCitySlug = $cityInfo['divar_slug'] ?? $this->selectedCity;
 
                 try {
-                    $result = $this->service->search($citySlug, $this->selectedCategory, 1);
+                    $result = $this->service->search($divarCitySlug, $this->selectedCategory, $this->selectedQuery, 1);
                     $this->results = $result['success'] ? $result : null;
                     $this->error = $result['success'] ? null : ($result['error'] ?? 'خطای ناشناخته');
 
@@ -115,8 +114,8 @@ final class BaladController
                         $this->loadExistingCallLogs();
                     }
                 } catch (\Exception $e) {
-                    Logger::error('Search failed', ['error' => $e->getMessage()]);
-                    $this->error = $this->selectedCategory .'در' .$this->selectedCity . ' یافت نشد';
+                    Logger::error('Divar Search failed', ['error' => $e->getMessage()]);
+                    $this->error = 'خطا در ارتباط با دیوار';
                 }
             }
         }
@@ -152,7 +151,7 @@ final class BaladController
         $ipAddress = $_SERVER['REMOTE_ADDR'] ?? '';
         $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? '';
 
-        // Use INSERT IGNORE to prevent duplicates, or check first
+        // Check if already exists
         $checkQuery = "SELECT id, status FROM call_logs WHERE place_id = ? AND phone_number = ?";
         $checkStmt = Db::getConnection()->prepare($checkQuery);
         $checkStmt->execute([$placeId, $phone]);
@@ -180,26 +179,50 @@ final class BaladController
         exit;
     }
 
+    private function getCitiesForProvince(string $provinceName): array
+    {
+        $result = [];
+        foreach ($this->cities as $slug => $info) {
+            if (($info['province'] ?? '') === $provinceName) {
+                $result[$slug] = $info['name'];
+            }
+        }
+        return $result;
+    }
+
     private function render(): void
     {
+        $provinceCities = [];
+        if ($this->selectedProvince) {
+            $provinceCities = $this->getCitiesForProvince($this->selectedProvince);
+        }
+
+        // Build full cities-by-province mapping for JavaScript
+        $allProvinceCities = [];
+        foreach ($this->provinces as $prov) {
+            $provinceName = $prov['name'];
+            $allProvinceCities[$provinceName] = $this->getCitiesForProvince($provinceName);
+        }
+
         $view = new SearchView(
             $this->provinces,
-            $this->categories,
+            $this->divarCategories,
             $this->citySlugs,
             $this->results,
             $this->error,
             $this->selectedCity,
             $this->selectedCategory,
-            'balad',
-            '', // selectedProvince
-            [], // provinceCities
-            []  // allProvinceCities
+            'divar',
+            $this->selectedProvince,
+            $provinceCities,
+            $allProvinceCities,
+            $this->selectedQuery
         );
         // Pass existing call logs to view
-        $view->setExistingCallLogs($this->existingCallLogs ?? []);
+        $view->setExistingCallLogs($this->existingCallLogs);
         $view->render();
     }
 }
 
-$controller = new BaladController();
+$controller = new DivarController();
 $controller->run();

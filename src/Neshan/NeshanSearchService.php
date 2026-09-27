@@ -37,7 +37,9 @@ final class NeshanSearchService
         
         // Convert to the same format as Balad results
         $formattedPlaces = array_map(function ($place) {
+            $placeId = 'neshan_' . md5(($place['name'] ?? '') . ($place['address'] ?? '') . ($place['phone'] ?? ''));
             return [
+                'id'           => $placeId,
                 'name'         => $place['name'] ?? 'نامشخص',
                 'address'      => $place['address'] ?? null,
                 'telephone'    => $place['phone'] ?? null,

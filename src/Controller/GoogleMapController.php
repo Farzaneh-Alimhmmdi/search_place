@@ -6,15 +6,15 @@ use Src\Support\Config;
 use Src\Support\Db;
 use Src\Support\Logger;
 use Src\Http\CurlHttpClient;
-use Src\Balad\BaladClient;
-use Src\Balad\BaladSearchService;
+use Src\GoogleMap\GoogleMapClient;
+use Src\GoogleMap\GoogleMapSearchService;
 use Src\View\SearchView;
 
-final class BaladController
+final class GoogleMapController
 {
     private CurlHttpClient $http;
-    private BaladClient $client;
-    private BaladSearchService $service;
+    private GoogleMapClient $client;
+    private GoogleMapSearchService $service;
 
     private array $provinces = [];
     private array $citySlugs = [];
@@ -24,10 +24,11 @@ final class BaladController
     private string $selectedCategory = 'guest-house';
     private ?array $results = null;
     private ?string $error = null;
+    private array $existingCallLogs = [];
 
     public function run(): void
     {
-        Config::load(__DIR__ . '/../../config/balad.php');
+        Config::load(__DIR__ . '/../../config/google_map.php');
         Db::connect(
             Config::get('db_host', '127.0.0.1'),
             Config::get('db_port', 3306),
@@ -48,17 +49,20 @@ final class BaladController
         $this->http = new CurlHttpClient([
             'timeout' => Config::get('timeout'),
             'connect_timeout' => Config::get('connect_timeout'),
-            'user_agent' => Config::get('user_agent'),
+            'user_agent' => Config::get('user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'),
             'max_retries' => Config::get('max_retries'),
             'request_delay' => Config::get('request_delay'),
         ]);
 
-        $this->client = new BaladClient(
+        $this->client = new GoogleMapClient(
             $this->http,
-            Config::get('base_url'),
-            Config::get('preview_bulk_url')
+            Config::get('endpoint'),
+            Config::get('api_key'),
+            Config::get('language', 'fa'),
+            Config::get('region', 'ir'),
+            Config::get('city_slugs')
         );
-        $this->service = new BaladSearchService($this->client);
+        $this->service = new GoogleMapSearchService($this->client);
     }
 
     private function loadData(): void
@@ -75,6 +79,7 @@ final class BaladController
         $this->selectedCategory = $_POST['place'] ?? 'guest-house';
         $this->results = null;
         $this->error = null;
+        $this->existingCallLogs = [];
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // Handle call logging (AJAX)
@@ -152,7 +157,7 @@ final class BaladController
         $ipAddress = $_SERVER['REMOTE_ADDR'] ?? '';
         $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? '';
 
-        // Use INSERT IGNORE to prevent duplicates, or check first
+        // Check if already exists
         $checkQuery = "SELECT id, status FROM call_logs WHERE place_id = ? AND phone_number = ?";
         $checkStmt = Db::getConnection()->prepare($checkQuery);
         $checkStmt->execute([$placeId, $phone]);
@@ -190,16 +195,16 @@ final class BaladController
             $this->error,
             $this->selectedCity,
             $this->selectedCategory,
-            'balad',
+            'google_map',
             '', // selectedProvince
             [], // provinceCities
             []  // allProvinceCities
         );
         // Pass existing call logs to view
-        $view->setExistingCallLogs($this->existingCallLogs ?? []);
+        $view->setExistingCallLogs($this->existingCallLogs);
         $view->render();
     }
 }
 
-$controller = new BaladController();
+$controller = new GoogleMapController();
 $controller->run();

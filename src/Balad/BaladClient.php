@@ -116,6 +116,8 @@ final class BaladClient
             $image  = $item['image'] ?? [];
 
             $places[] = [
+                'id'           => $item['token'] ?? null,
+                'token'        => $item['token'] ?? null,
                 'name'         => $item['name'] ?? 'نامشخص',
                 'address'      => $item['address'] ?? null,
                 'telephone'    => $item['telephone'] ?? null,
