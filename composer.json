@@ -1,0 +1,18 @@
+{
+    "name": "search-place/raah-search",
+    "description": "Raah V4 search - two-step place lookup",
+    "type": "project",
+    "require": {
+        "php": "^8.2",
+        "ext-curl": "*",
+        "ext-json": "*"
+    },
+    "autoload": {
+        "psr-4": {
+            "Src\\": "src/"
+        },
+        "files": [
+            "src/Exceptions/Exceptions.php"
+        ]
+    }
+}
