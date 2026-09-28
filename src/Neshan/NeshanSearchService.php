@@ -49,6 +49,8 @@ final class NeshanSearchService
                 'longitude'    => $place['longitude'] ?? null,
                 'image_preview'=> null, // Neshan doesn't provide image previews easily
                 'neshan_url'   => $place['neshan_url'] ?? null,
+                'rating'       => $place['rating'] ?? null,
+                'instagram_id' => $place['instagram_id'] ?? null,
             ];
         }, $places);
 

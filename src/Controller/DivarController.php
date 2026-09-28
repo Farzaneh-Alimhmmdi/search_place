@@ -105,7 +105,9 @@ final class DivarController
                 $divarCitySlug = $cityInfo['divar_slug'] ?? $this->selectedCity;
 
                 try {
-                    $result = $this->service->search($divarCitySlug, $this->selectedCategory, $this->selectedQuery, 1);
+                    // Default to 3 pages for more results, can be configured later
+                    $maxPages = 3;
+                    $result = $this->service->search($divarCitySlug, $this->selectedCategory, $this->selectedQuery, 1, $maxPages);
                     $this->results = $result['success'] ? $result : null;
                     $this->error = $result['success'] ? null : ($result['error'] ?? 'خطای ناشناخته');
 

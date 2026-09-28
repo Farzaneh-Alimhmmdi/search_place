@@ -23,11 +23,12 @@ final class DivarSearchService
      * @param string $category  Category key from config
      * @param string $query     Optional search query
      * @param int    $page      Result page number
+     * @param int    $maxPages  Maximum number of pages to fetch
      * @return array ['success' => true, 'places' => [...], ...] or ['success' => false, 'error' => '...']
      */
-    public function search(string $citySlug, string $category, string $query = '', int $page = 1): array
+    public function search(string $citySlug, string $category, string $query = '', int $page = 1, int $maxPages = 1): array
     {
-        $searchResult = $this->client->search($citySlug, $category, $query, $page);
+        $searchResult = $this->client->search($citySlug, $category, $query, $page, $maxPages);
         if (!$searchResult['success']) {
             return $searchResult;
         }

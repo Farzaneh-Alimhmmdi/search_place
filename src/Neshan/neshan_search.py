@@ -46,6 +46,7 @@ class PlaceResult:
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     rating: Optional[float] = None
+    instagram_id: Optional[str] = None
     neshan_url: Optional[str] = None
 
 
@@ -267,12 +268,28 @@ class NeshanSearcher:
                     
                     # Try to find website
                     website = None
+                    instagram_id = None
                     links = el.query_selector_all('a')
                     for link in links:
                         href = link.get_attribute('href')
                         if href and ('http' in href or 'www.' in href) and 'neshan.org' not in href and 'mapbox.com' not in href and 'neshan.blog' not in href:
-                            website = href
-                            break
+                            # Check if it's an Instagram link
+                            if 'instagram.com' in href:
+                                # Extract Instagram username from URL
+                                import re
+                                ig_match = re.search(r'instagram\.com/([^/?#]+)', href)
+                                if ig_match:
+                                    instagram_id = ig_match.group(1)
+                            else:
+                                website = href
+                    
+                    # Also check for Instagram in text content
+                    if not instagram_id:
+                        for line in lines:
+                            ig_match = re.search(r'(?:instagram|اینستاگرام|اینستا)[\s:@]*([a-zA-Z0-9_.]{1,30})', line, re.IGNORECASE)
+                            if ig_match:
+                                instagram_id = ig_match.group(1)
+                                break
                     
                     seen_names.add(name)
                     
@@ -285,6 +302,7 @@ class NeshanSearcher:
                         latitude=None,
                         longitude=None,
                         rating=rating,
+                        instagram_id=instagram_id,
                         neshan_url=page.url,
                     ))
                     

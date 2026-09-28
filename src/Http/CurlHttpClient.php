@@ -96,16 +96,18 @@ final class CurlHttpClient
     public function getLastStatusCode(): int { return $this->lastStatusCode; }
 
     /**
-     * Perform a GET request and return the raw response body (no JSON decoding).
+     * Perform a POST request with custom headers.
      *
      * @param string $url
-     * @param array $options Optional curl options (e.g. POST)
-     * @return array ['success' => bool, 'body' => string, 'http_code' => int, 'error' => string|null]
+     * @param string $postData
+     * @param array $headers
+     * @return array ['success' => bool, 'data' => array, 'http_code' => int, 'error' => string|null]
      */
-    public function getRaw(string $url, array $options = []): array
+    public function postWithHeaders(string $url, string $postData, array $headers): array
     {
         $attempt = 0;
         $lastError = '';
+        $mergedHeaders = array_merge($this->headers, $headers);
 
         while ($attempt <= $this->maxRetries) {
             if ($attempt > 0 && $this->delay > 0) {
@@ -122,16 +124,13 @@ final class CurlHttpClient
                 CURLOPT_FOLLOWLOCATION => true,
                 CURLOPT_MAXREDIRS => 5,
                 CURLOPT_SSL_VERIFYPEER => true,
-                CURLOPT_HTTPHEADER => array_map(fn($k, $v) => "$k: $v", array_keys($this->headers), $this->headers),
+                CURLOPT_POST => true,
+                CURLOPT_POSTFIELDS => $postData,
+                CURLOPT_HTTPHEADER => array_map(fn($k, $v) => "$k: $v", array_keys($mergedHeaders), $mergedHeaders),
             ]);
 
-            if (!empty($options['POST'])) {
-                curl_setopt($ch, CURLOPT_POST, true);
-                curl_setopt($ch, CURLOPT_POSTFIELDS, $options['POST']);
-            }
-
-            $body = curl_exec($ch);
-            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $response = curl_exec($ch);
+            $this->lastStatusCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
             $error = curl_error($ch);
             curl_close($ch);
 
@@ -142,21 +141,25 @@ final class CurlHttpClient
                 continue;
             }
 
-            if ($httpCode >= 200 && $httpCode < 300) {
-                return ['success' => true, 'body' => $body, 'http_code' => $httpCode, 'error' => null];
+            if ($this->lastStatusCode >= 200 && $this->lastStatusCode < 300) {
+                $data = json_decode($response, true);
+                if (json_last_error() !== JSON_ERROR_NONE) {
+                    throw new BaladRequestException("Invalid JSON response from: $url");
+                }
+                return ['success' => true, 'data' => $data, 'http_code' => $this->lastStatusCode];
             }
 
-            if ($httpCode >= 429 || $httpCode >= 500) {
-                $lastError = "HTTP $httpCode";
-                Logger::warning("HTTP retryable error: $httpCode for $url");
+            if ($this->lastStatusCode >= 429 || $this->lastStatusCode >= 500) {
+                $lastError = "HTTP $this->lastStatusCode";
+                Logger::warning("HTTP retryable error: $this->lastStatusCode for $url");
                 $attempt++;
                 continue;
             }
 
-            return ['success' => false, 'body' => $body, 'http_code' => $httpCode, 'error' => "HTTP request failed with status $httpCode for URL: $url"];
+            throw new BaladRequestException("HTTP request failed with status $this->lastStatusCode for URL: $url");
         }
 
         Logger::error("HTTP request failed after $attempt attempts", ['url' => $url, 'error' => $lastError]);
-        return ['success' => false, 'body' => '', 'http_code' => 0, 'error' => "HTTP request failed after $attempt attempts: $lastError"];
+        throw new BaladRequestException("HTTP request failed after $attempt attempts: $lastError");
     }
 }

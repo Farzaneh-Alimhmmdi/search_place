@@ -70,13 +70,13 @@ final class SearchView
     public function render(): void
     {
         if ($this->provider === 'neshan') {
-            $providerLabel = 'نشان (Neshan)';
+            $providerLabel = 'نشان';
         } elseif ($this->provider === 'google_map') {
-            $providerLabel = 'گوگل Map';
+            $providerLabel = 'گوگل';
         } elseif ($this->provider === 'divar') {
-            $providerLabel = 'دیوار (Divar)';
+            $providerLabel = 'دیوار';
         } else {
-            $providerLabel = 'بلد (Balad)';
+            $providerLabel = 'بلد';
         }
         ?>
         <!DOCTYPE html>
@@ -85,55 +85,267 @@ final class SearchView
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>جستجوی مکان - <?= htmlspecialchars($providerLabel) ?></title>
+            <link rel="preconnect" href="https://fonts.googleapis.com">
+            <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+            <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700&display=swap" rel="stylesheet">
             <style>
                 * { margin: 0; padding: 0; box-sizing: border-box; }
-                body { font-family: 'Segoe UI', Tahoma, sans-serif; background: #f5f5f5; direction: rtl; }
-                .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
-                .form-box { background: #fff; padding: 30px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 30px; }
-                .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 15px; }
-                .form-title { font-size: 24px; font-weight: bold; margin: 0; color: #333; }
-                .form-row { display: flex; gap: 15px; flex-wrap: wrap; }
-                .form-group { flex: 1; min-width: 200px; margin-bottom: 15px; }
-                .form-group label { display: block; margin-bottom: 5px; font-weight: 600; color: #555; }
-                .form-group select { width: 100%; padding: 10px 15px; border: 2px solid #ddd; border-radius: 8px; font-size: 16px; }
-                .submit-btn { background: #4a90d9; color: #fff; padding: 12px 30px; border: none; border-radius: 8px; font-size: 16px; cursor: pointer; }
-                .submit-btn:hover { background: #357abd; }
-                .results-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 20px; }
-                .card { background: #fff; border-radius: 12px; padding: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-                .card h3 { font-size: 18px; margin-bottom: 10px; color: #333; }
-                .card p { margin-bottom: 6px; color: #666; font-size: 14px; }
-                .card .phone { color: #27ae60; }
-                .card .website { color: #2980b9; text-decoration: none; }
-                .card img { width: 100%; height: 150px; object-fit: cover; border-radius: 8px; margin-bottom: 10px; }
-                .error { background: #fee; color: #c00; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
-                .info { background: #e8f4fd; color: #333; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
-                .provider-badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: bold; margin-left: 10px; }
-                .provider-balad { background: #e3f2fd; color: #1565c0; }
-                .provider-neshan { background: #f3e5f5; color: #7b1fa2; }
-                .provider-google_map { background: #e8f5e9; color: #2e7d32; }
-                .provider-divar { background: #fef3e2; color: #e67e22; }
-                .call-logs-link { background: #27ae60; color: #fff; padding: 10px 20px; border-radius: 6px; text-decoration: none; font-size: 14px; transition: background 0.2s; }
-                .call-logs-link:hover { background: #219a52; }
+                body { 
+                    font-family: 'Vazirmatn', 'Segoe UI', Tahoma, sans-serif; 
+                    background: #f8f9fa; 
+                    direction: rtl; 
+                    color: #333;
+                    line-height: 1.6;
+                }
+                .container { max-width: 900px; margin: 0 auto; padding: 24px 16px; }
+                
+                /* Form Section */
+                .form-box { 
+                    background: #fff; 
+                    padding: 28px; 
+                    border-radius: 16px; 
+                    box-shadow: 0 2px 8px rgba(0,0,0,0.06), 0 1px 3px rgba(0,0,0,0.08);
+                    margin-bottom: 24px;
+                    border: 1px solid #eef0f2;
+                }
+                .header { 
+                    display: flex; 
+                    justify-content: space-between; 
+                    align-items: center; 
+                    margin-bottom: 24px; 
+                    flex-wrap: wrap; 
+                    gap: 16px;
+                    padding-bottom: 16px;
+                    border-bottom: 1px solid #f0f0f0;
+                }
+                .form-title { 
+                    font-size: 22px; 
+                    font-weight: 700; 
+                    margin: 0; 
+                    color: #1a1a2e;
+                    display: flex;
+                    align-items: center;
+                    gap: 10px;
+                }
+                .form-title::before {
+                    content: '🔍';
+                    font-size: 24px;
+                }
+                
+                .form-row { display: flex; gap: 16px; flex-wrap: wrap; }
+                .form-group { flex: 1; min-width: 200px; }
+                .form-group label { 
+                    display: block; 
+                    margin-bottom: 8px; 
+                    font-weight: 600; 
+                    color: #444;
+                    font-size: 14px;
+                }
+                .form-group select { 
+                    width: 100%; 
+                    padding: 12px 16px; 
+                    border: 2px solid #e8e8e8; 
+                    border-radius: 10px; 
+                    font-size: 15px;
+                    background: #fafafa;
+                    transition: all 0.2s ease;
+                    cursor: pointer;
+                }
+                .form-group select:focus { 
+                    outline: none; 
+                    border-color: #4a90d9; 
+                    background: #fff;
+                    box-shadow: 0 0 0 3px rgba(74, 144, 217, 0.15);
+                }
+                .form-group select:hover { border-color: #d0d0d0; }
+                
+                .submit-btn { 
+                    background: linear-gradient(135deg, #4a90d9 0%, #357abd 100%);
+                    color: #fff; 
+                    padding: 14px 32px; 
+                    border: none; 
+                    border-radius: 10px; 
+                    font-size: 16px;
+                    font-weight: 600;
+                    cursor: pointer;
+                    transition: all 0.2s ease;
+                    box-shadow: 0 2px 6px rgba(74, 144, 217, 0.3);
+                    width: 100%;
+                    margin-top: 8px;
+                }
+                .submit-btn:hover { 
+                    transform: translateY(-1px);
+                    box-shadow: 0 4px 12px rgba(74, 144, 217, 0.4);
+                }
+                .submit-btn:active { transform: translateY(0); }
+                
+                /* Results List */
+                .results-list { 
+                    display: flex; 
+                    flex-direction: column; 
+                    gap: 12px; 
+                }
+                .result-item { 
+                    background: #fff; 
+                    border-radius: 14px; 
+                    box-shadow: 0 2px 8px rgba(0,0,0,0.06), 0 1px 3px rgba(0,0,0,0.05);
+                    border: 1px solid #eef0f2;
+                    overflow: hidden;
+                    transition: all 0.25s ease;
+                }
+                .result-item:hover { 
+                    transform: translateY(-2px);
+                    box-shadow: 0 8px 24px rgba(0,0,0,0.08), 0 2px 6px rgba(0,0,0,0.06);
+                    border-color: #e0e4e8;
+                }
+                .result-item.has-image { display: grid; grid-template-columns: 140px 1fr; }
+                
+                .result-image { 
+                    width: 100%; 
+                    height: 100%; 
+                    min-height: 140px;
+                    object-fit: cover; 
+                    background: linear-gradient(135deg, #f0f2f5 0%, #e8ebef 100%);
+                }
+                
+                .result-content { 
+                    padding: 18px 20px; 
+                    display: flex; 
+                    flex-direction: column; 
+                    justify-content: center;
+                    gap: 10px;
+                }
+                
+                .result-header {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: flex-start;
+                    gap: 12px;
+                    flex-wrap: wrap;
+                }
+                
+                .result-name { 
+                    font-size: 17px; 
+                    font-weight: 700; 
+                    color: #1a1a2e;
+                    margin: 0;
+                    line-height: 1.4;
+                }
+                
+                .provider-tag {
+                    font-size: 11px;
+                    font-weight: 700;
+                    padding: 4px 10px;
+                    border-radius: 20px;
+                    white-space: nowrap;
+                    flex-shrink: 0;
+                    margin-top: 2px;
+                }
+                .provider-balad { background: #e8f0fe; color: #1a73e8; }
+                .provider-neshan { background: #f3e8ff; color: #9c27b0; }
+                .provider-google_map { background: #e6f4ea; color: #1e7e34; }
+                .provider-divar { background: #fff4e5; color: #e67e22; }
+                
+                .result-meta {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 6px;
+                }
+                
+                .meta-row {
+                    display: flex;
+                    align-items: center;
+                    gap: 10px;
+                    font-size: 14px;
+                    color: #555;
+                }
+                .meta-row i {
+                    width: 20px;
+                    text-align: center;
+                    color: #888;
+                    font-size: 15px;
+                }
+                .meta-row .label {
+                    font-weight: 500;
+                    color: #666;
+                    min-width: 60px;
+                }
+                .meta-row .value {
+                    color: #333;
+                    word-break: break-word;
+                }
+                .meta-row .phone-value { color: #27ae60; font-weight: 600; }
+                .meta-row a.value { color: #2980b9; text-decoration: none; }
+                .meta-row a.value:hover { text-decoration: underline; }
+                
+                .result-actions {
+                    display: flex;
+                    gap: 10px;
+                    margin-top: 4px;
+                    padding-top: 12px;
+                    border-top: 1px solid #f0f0f0;
+                    flex-wrap: wrap;
+                }
+                
+                .btn-link {
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 6px;
+                    padding: 8px 14px;
+                    font-size: 13px;
+                    font-weight: 500;
+                    border-radius: 8px;
+                    text-decoration: none;
+                    transition: all 0.2s ease;
+                    border: 1px solid transparent;
+                }
+                .btn-link-primary {
+                    background: #e8f0fe;
+                    color: #1a73e8;
+                    border-color: #d2e3fc;
+                }
+                .btn-link-primary:hover { background: #d2e3fc; }
+                .btn-link-secondary {
+                    background: #f5f5f5;
+                    color: #555;
+                    border-color: #e8e8e8;
+                }
+                .btn-link-secondary:hover { background: #eee; }
+                
+                /* Call Button */
+                .call-action { width: 100%; }
                 .call-btn {
-                    background: #27ae60;
+                    width: 100%;
+                    background: linear-gradient(135deg, #27ae60 0%, #219a52 100%);
                     color: #fff;
                     border: none;
-                    padding: 10px 20px;
-                    border-radius: 6px;
-                    font-size: 14px;
+                    padding: 14px 24px;
+                    border-radius: 10px;
+                    font-size: 15px;
+                    font-weight: 600;
                     cursor: pointer;
                     display: inline-flex;
                     align-items: center;
-                    gap: 8px;
-                    margin-top: 10px;
-                    transition: background 0.2s;
+                    justify-content: center;
+                    gap: 10px;
+                    transition: all 0.2s ease;
+                    box-shadow: 0 2px 6px rgba(39, 174, 96, 0.3);
                 }
-                .call-btn:hover { background: #219a52; }
-                .call-btn:disabled { background: #95a5a6; cursor: not-allowed; }
+                .call-btn:hover:not(:disabled) { 
+                    transform: translateY(-1px);
+                    box-shadow: 0 4px 12px rgba(39, 174, 96, 0.4);
+                }
+                .call-btn:active:not(:disabled) { transform: translateY(0); }
+                .call-btn:disabled { 
+                    background: #bdc3c7; 
+                    cursor: not-allowed; 
+                    box-shadow: none;
+                    transform: none;
+                }
                 .call-btn .spinner {
                     display: none;
-                    width: 16px;
-                    height: 16px;
+                    width: 18px;
+                    height: 18px;
                     border: 2px solid #fff;
                     border-top-color: transparent;
                     border-radius: 50%;
@@ -142,49 +354,113 @@ final class SearchView
                 .call-btn.loading .spinner { display: block; }
                 .call-btn.loading .btn-text { opacity: 0.7; }
                 .call-btn.call-btn-saved {
-                    background: #95a5a6;
-                    cursor: not-allowed;
+                    background: linear-gradient(135deg, #95a5a6 0%, #7f8c8d 100%);
+                    box-shadow: none;
                 }
-                .call-btn.call-btn-saved .btn-text {
-                    opacity: 0.9;
-                }
+                .call-btn.call-btn-saved .btn-text { opacity: 1; }
                 @keyframes spin { to { transform: rotate(360deg); } }
-
-                /* Status badge */
-                .call-status {
-                    display: inline-block;
-                    padding: 4px 10px;
-                    border-radius: 12px;
+                
+                /* Status badge inline */
+                .status-badge {
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 6px;
+                    padding: 6px 12px;
+                    border-radius: 20px;
                     font-size: 12px;
                     font-weight: 600;
-                    margin-right: 10px;
+                    white-space: nowrap;
                 }
                 .status-pending { background: #fff3cd; color: #856404; }
                 .status-completed { background: #d4edda; color: #155724; }
                 .status-cancelled { background: #f8d7da; color: #721c24; }
-
+                
                 /* Toast notifications */
                 .toast-container {
                     position: fixed;
-                    top: 20px;
-                    left: 20px;
+                    top: 24px;
+                    left: 24px;
                     z-index: 9999;
                 }
                 .toast {
                     background: #fff;
-                    padding: 15px 20px;
-                    border-radius: 8px;
-                    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                    padding: 16px 22px;
+                    border-radius: 10px;
+                    box-shadow: 0 8px 24px rgba(0,0,0,0.12), 0 2px 6px rgba(0,0,0,0.08);
                     margin-bottom: 10px;
                     min-width: 300px;
-                    animation: slideIn 0.3s ease;
+                    max-width: 400px;
+                    animation: slideIn 0.35s cubic-bezier(0.4, 0, 0.2, 1);
                     border-left: 4px solid #27ae60;
+                    font-size: 14px;
                 }
                 .toast.error { border-left-color: #e74c3c; }
                 .toast.warning { border-left-color: #f39c12; }
                 @keyframes slideIn {
                     from { transform: translateX(-100%); opacity: 0; }
                     to { transform: translateX(0); opacity: 1; }
+                }
+                
+                /* Messages */
+                .error { 
+                    background: #fef2f2; 
+                    color: #c53030; 
+                    padding: 16px 20px; 
+                    border-radius: 10px; 
+                    margin-bottom: 20px; 
+                    border: 1px solid #fecaca;
+                    font-size: 14px;
+                }
+                .info { 
+                    background: #eff6ff; 
+                    color: #1e40af; 
+                    padding: 16px 20px; 
+                    border-radius: 10px; 
+                    margin-bottom: 20px; 
+                    border: 1px solid #bfdbfe;
+                    font-size: 14px;
+                }
+                .info strong { color: #1e3a8a; }
+                
+                /* Empty state */
+                .empty-state {
+                    text-align: center;
+                    padding: 60px 20px;
+                    color: #888;
+                }
+                .empty-state-icon {
+                    font-size: 48px;
+                    margin-bottom: 16px;
+                    opacity: 0.5;
+                }
+                .empty-state-title {
+                    font-size: 18px;
+                    font-weight: 600;
+                    color: #555;
+                    margin-bottom: 8px;
+                }
+                .empty-state-desc {
+                    font-size: 14px;
+                    color: #888;
+                }
+                
+                /* Responsive */
+                @media (max-width: 600px) {
+                    .container { padding: 16px 12px; }
+                    .form-box { padding: 20px; border-radius: 12px; }
+                    .form-row { flex-direction: column; gap: 0; }
+                    .form-group { min-width: 100%; }
+                    .result-item.has-image { grid-template-columns: 1fr; }
+                    .result-image { min-height: 180px; }
+                    .result-content { padding: 16px; }
+                    .result-header { flex-direction: column; align-items: flex-start; }
+                    .toast-container { left: 12px; right: 12px; }
+                    .toast { min-width: auto; max-width: none; }
+                }
+                
+                @media (max-width: 480px) {
+                    .meta-row { flex-wrap: wrap; }
+                    .meta-row .label { min-width: auto; width: max-content; }
                 }
             </style>
         </head>
@@ -308,81 +584,156 @@ final class SearchView
                     $hasPlaces = !empty($this->results['places']);
                     ?>
                     <?php if (!$hasPlaces): ?>
-                        <div class="info">
-                            <strong>یافت نشد:</strong> هیچ
-                            <?= htmlspecialchars($categoryLabel ?: $this->selectedCategory) ?>
-                            ای در
-                            <?= htmlspecialchars($this->selectedCity) ?>
-                            پیدا نشد.
+                        <div class="empty-state">
+                            <div class="empty-state-icon">🔍</div>
+                            <div class="empty-state-title">نتیجه‌ای یافت نشد</div>
+                            <div class="empty-state-desc">
+                                هیچ <?= htmlspecialchars($categoryLabel ?: $this->selectedCategory) ?> 
+                                ای در <?= htmlspecialchars($this->selectedCity) ?> پیدا نشد.
+                            </div>
                         </div>
                     <?php else: ?>
                         <div class="info">
                             <strong><?= htmlspecialchars($this->results['title'] ?? '') ?></strong> -
                             یافت شد: <?= $this->results['total'] ?> مورد
                         </div>
-                        <div class="results-grid">
+                        <div class="results-list">
                             <?php foreach ($this->results['places'] as $place): ?>
-                                <div class="card">
-                                    <?php if (!empty($place['image_preview'])): ?>
-                                        <img src="<?= htmlspecialchars($place['image_preview']) ?>" alt="<?= htmlspecialchars($place['name']) ?>">
+                                <?php 
+                                $hasImage = !empty($place['image_preview']);
+                                $phone = $place['telephone'] ?? ($place['phone'] ?? null);
+                                $hasPhone = !empty($phone) && $phone !== '---';
+                                $placeId = $place['id'] ?? $place['token'] ?? $place['place_id'] ?? '';
+                                $hasExistingLog = $hasPhone ? $this->hasExistingCallLog($place) : false;
+                                $existingStatus = $hasPhone ? $this->getExistingCallLogStatus($place) : null;
+                                ?>
+                                <div class="result-item <?= $hasImage ? 'has-image' : '' ?>">
+                                    <?php if ($hasImage): ?>
+                                        <img src="<?= htmlspecialchars($place['image_preview']) ?>" 
+                                             alt="<?= htmlspecialchars($place['name']) ?>" 
+                                             class="result-image"
+                                             loading="lazy">
                                     <?php endif; ?>
-                                    <h3><?= htmlspecialchars($place['name']) ?></h3>
-                                    <p><strong>آدرس:</strong> <?= htmlspecialchars($place['address'] ?? '---') ?></p>
-                                    <?php if (!empty($place['description'])): ?>
-                                        <p><strong>توضیحات:</strong> <?= htmlspecialchars($place['description']) ?></p>
-                                    <?php endif; ?>
-                                    <?php if (!empty($place['price'])): ?>
-                                        <p><strong>قیمت:</strong> <?= htmlspecialchars($place['price']) ?></p>
-                                    <?php endif; ?>
-                                    <p class="phone"><strong>تلفن:</strong> <?= htmlspecialchars($place['telephone'] ?? '---') ?></p>
-                                    <?php if (!empty($place['website'])): ?>
-                                        <p><strong>وب‌سایت:</strong>
-                                            <a href="<?= htmlspecialchars($place['website']) ?>"
-                                               target="_blank" class="website"><?= htmlspecialchars($place['website']) ?></a>
-                                        </p>
-                                    <?php endif; ?>
-                                    <?php if ($this->provider === 'balad' && !empty($place['balad_url'])): ?>
-                                        <p><a href="<?= htmlspecialchars($place['balad_url']) ?>" target="_blank">مشاهده در بلد ↗</a></p>
-                                    <?php elseif ($this->provider === 'neshan' && !empty($place['neshan_url'])): ?>
-                                        <p><a href="<?= htmlspecialchars($place['neshan_url']) ?>" target="_blank">مشاهده در نشان ↗</a></p>
-                                    <?php elseif ($this->provider === 'google_map' && !empty($place['place_id'])): ?>
-                                        <p><a href="https://www.google.com/maps/search/?api=1&query=<?= urlencode($place['name'] . ' ' . $place['address']) ?>" target="_blank">مشاهده در گوگل ↗</a></p>
-                                    <?php elseif ($this->provider === 'divar' && !empty($place['divar_url'])): ?>
-                                        <p><a href="<?= htmlspecialchars($place['divar_url']) ?>" target="_blank">مشاهده در دیوار ↗</a></p>
-                                    <?php endif; ?>
-                                    
-                                    <?php 
-                                    $phone = $place['telephone'] ?? ($place['phone'] ?? null);
-                                    $hasPhone = !empty($phone) && $phone !== '---';
-                                    if ($hasPhone): 
-                                        $placeId = $place['id'] ?? $place['token'] ?? $place['place_id'] ?? '';
-                                        $hasExistingLog = $this->hasExistingCallLog($place);
-                                        $existingStatus = $this->getExistingCallLogStatus($place);
-                                    ?>
-                                        <div class="call-action">
-                                            <?php if ($hasExistingLog): ?>
-                                                <button type="button" class="call-btn call-btn-saved" disabled>
-                                                    <span class="btn-text">
-                                                        <?php 
-                                                        $statusLabel = $existingStatus === 'completed' ? '✅ تکمیل شده' : 
-                                                                       ($existingStatus === 'cancelled' ? '❌ لغو شده' : '⏳ در انتظار');
-                                                        echo $statusLabel;
-                                                        ?>
+                                    <div class="result-content">
+                                        <div class="result-header">
+                                            <h3 class="result-name"><?= htmlspecialchars($place['name']) ?></h3>
+                                            <span class="provider-tag provider-<?= $this->provider ?>">
+                                                <?= $this->provider === 'balad' ? 'بلد' : ($this->provider === 'neshan' ? 'نشان' : ($this->provider === 'google_map' ? 'گوگل' : 'دیوار')) ?>
+                                            </span>
+                                        </div>
+                                        
+                                        <div class="result-meta">
+                                            <?php if (!empty($place['address'])): ?>
+                                                <div class="meta-row">
+                                                    <i>📍</i>
+                                                    <span class="label">آدرس:</span>
+                                                    <span class="value"><?= htmlspecialchars($place['address']) ?></span>
+                                                </div>
+                                            <?php endif; ?>
+                                            
+                                            <?php if (!empty($place['description'])): ?>
+                                                <div class="meta-row">
+                                                    <i>📝</i>
+                                                    <span class="label">توضیحات:</span>
+                                                    <span class="value"><?= htmlspecialchars($place['description']) ?></span>
+                                                </div>
+                                            <?php endif; ?>
+                                            
+                                            <?php if (!empty($place['price'])): ?>
+                                                <div class="meta-row">
+                                                    <i>💰</i>
+                                                    <span class="label">قیمت:</span>
+                                                    <span class="value"><?= htmlspecialchars($place['price']) ?></span>
+                                                </div>
+                                            <?php endif; ?>
+                                            
+                                            <?php if ($hasPhone): ?>
+                                                <div class="meta-row">
+                                                    <i>📞</i>
+                                                    <span class="label">تلفن:</span>
+                                                    <span class="value phone-value"><?= htmlspecialchars($phone) ?></span>
+                                                </div>
+                                            <?php endif; ?>
+                                            
+                                            <?php if (!empty($place['website'])): ?>
+                                                <div class="meta-row">
+                                                    <i>🌐</i>
+                                                    <span class="label">وب‌سایت:</span>
+                                                    <span class="value">
+                                                        <a href="<?= htmlspecialchars($place['website']) ?>" target="_blank" class="value">
+                                                            <?= htmlspecialchars($place['website']) ?>
+                                                        </a>
                                                     </span>
-                                                </button>
-                                            <?php else: ?>
-                                                <button type="button" class="call-btn" 
-                                                        data-place-id="<?= htmlspecialchars($placeId) ?>"
-                                                        data-phone="<?= htmlspecialchars($phone) ?>"
-                                                        data-name="<?= htmlspecialchars($place['name']) ?>"
-                                                        data-city="<?= htmlspecialchars($this->selectedCity) ?>"
-                                                        data-category="<?= htmlspecialchars($this->selectedCategory) ?>">
-                                                    <span class="spinner"></span>
-                                                    <span class="btn-text">📞 تماس و ثبت</span>
-                                                </button>
+                                                </div>
+                                            <?php endif; ?>
+                                            
+                                            <?php if (!empty($place['rating'])): ?>
+                                                <div class="meta-row">
+                                                    <i>⭐</i>
+                                                    <span class="label">امتیاز:</span>
+                                                    <span class="value"><?= htmlspecialchars($place['rating']) ?></span>
+                                                </div>
+                                            <?php endif; ?>
+                                            
+                                            <?php if (!empty($place['instagram_id'])): ?>
+                                                <div class="meta-row">
+                                                    <i>📷</i>
+                                                    <span class="label">اینستاگرام:</span>
+                                                    <span class="value">
+                                                        <a href="https://instagram.com/<?= htmlspecialchars($place['instagram_id']) ?>" target="_blank" class="value">
+                                                            @<?= htmlspecialchars($place['instagram_id']) ?>
+                                                        </a>
+                                                    </span>
+                                                </div>
                                             <?php endif; ?>
                                         </div>
-                                    <?php endif; ?>
+                                        
+                                        <div class="result-actions">
+                                            <?php if ($this->provider === 'balad' && !empty($place['balad_url'])): ?>
+                                                <a href="<?= htmlspecialchars($place['balad_url']) ?>" target="_blank" class="btn-link btn-link-secondary">
+                                                    مشاهده در بلد ↗
+                                                </a>
+                                            <?php elseif ($this->provider === 'neshan' && !empty($place['neshan_url'])): ?>
+                                                <a href="<?= htmlspecialchars($place['neshan_url']) ?>" target="_blank" class="btn-link btn-link-secondary">
+                                                    مشاهده در نشان ↗
+                                                </a>
+                                            <?php elseif ($this->provider === 'google_map' && !empty($place['place_id'])): ?>
+                                                <a href="https://www.google.com/maps/search/?api=1&query=<?= urlencode($place['name'] . ' ' . ($place['address'] ?? '')) ?>" target="_blank" class="btn-link btn-link-secondary">
+                                                    مشاهده در گوگل ↗
+                                                </a>
+                                            <?php elseif ($this->provider === 'divar' && !empty($place['divar_url'])): ?>
+                                                <a href="<?= htmlspecialchars($place['divar_url']) ?>" target="_blank" class="btn-link btn-link-secondary">
+                                                    مشاهده در دیوار ↗
+                                                </a>
+                                            <?php endif; ?>
+                                            
+                                            <?php if ($hasPhone): ?>
+                                                <div class="call-action">
+                                                    <?php if ($hasExistingLog): ?>
+                                                        <button type="button" class="call-btn call-btn-saved" disabled>
+                                                            <span class="btn-text">
+                                                                <?php 
+                                                                $statusLabel = $existingStatus === 'completed' ? '✅ تکمیل شده' : 
+                                                                               ($existingStatus === 'cancelled' ? '❌ لغو شده' : '⏳ در انتظار');
+                                                                echo $statusLabel;
+                                                                ?>
+                                                            </span>
+                                                        </button>
+                                                    <?php else: ?>
+                                                        <button type="button" class="call-btn" 
+                                                                data-place-id="<?= htmlspecialchars($placeId) ?>"
+                                                                data-phone="<?= htmlspecialchars($phone) ?>"
+                                                                data-name="<?= htmlspecialchars($place['name']) ?>"
+                                                                data-city="<?= htmlspecialchars($this->selectedCity) ?>"
+                                                                data-category="<?= htmlspecialchars($this->selectedCategory) ?>">
+                                                            <span class="spinner"></span>
+                                                            <span class="btn-text">📞 تماس و ثبت</span>
+                                                        </button>
+                                                    <?php endif; ?>
+                                                </div>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
                                 </div>
                             <?php endforeach; ?>
                         </div>

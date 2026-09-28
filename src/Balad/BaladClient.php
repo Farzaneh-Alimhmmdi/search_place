@@ -115,6 +115,23 @@ final class BaladClient
             $coords = $item['geometry']['coordinates'] ?? [];
             $image  = $item['image'] ?? [];
 
+            // Extract rating from the rating object
+            $rating = null;
+            if (isset($item['rating']['score']) && is_numeric($item['rating']['score'])) {
+                $rating = (float)$item['rating']['score'];
+            }
+
+            // Extract Instagram ID - not available in preview-bulk, check images sources
+            $instagramId = null;
+            if (isset($item['images']) && is_array($item['images'])) {
+                foreach ($item['images'] as $img) {
+                    if (($img['source'] ?? '') === 'instagram' && isset($img['profile']['username'])) {
+                        $instagramId = $img['profile']['username'];
+                        break;
+                    }
+                }
+            }
+
             $places[] = [
                 'id'           => $item['token'] ?? null,
                 'token'        => $item['token'] ?? null,
@@ -129,6 +146,8 @@ final class BaladClient
                 'balad_url'    => ($item['url_title'] ?? null) && ($item['token'] ?? null)
                     ? 'https://balad.ir/p/' . $item['url_title'] . '-' . $item['token'] . '/'
                     : null,
+                'rating'       => $rating,
+                'instagram_id' => $instagramId,
             ];
         }
 

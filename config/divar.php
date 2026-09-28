@@ -10,10 +10,10 @@ return [
     'user_agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
     // Categories for Divar (rent related)
     'categories' => [
-        'rent-temporary' => 'اجاره روزانه/موقت',
+        ['value' => 'rent-temporary', 'label' => 'اجاره روزانه/موقت'],
     ],
     'city_slugs' => require __DIR__ . '/provinces.php',
-    'cities_file' => __DIR__ . '/../cities.json',
+    'cities_file' => __DIR__ . '/cities.json',
     // Database config (shared)
     'db_host' => $_ENV['DB_HOST'] ?? '127.0.0.1',
     'db_port' => $_ENV['DB_PORT'] ?? 3306,
