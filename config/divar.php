@@ -10,7 +10,7 @@ return [
     'user_agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
     // Categories for Divar (rent related)
     'categories' => [
-        ['value' => 'rent-temporary', 'label' => 'اجاره روزانه/موقت'],
+        ['value' => 'temporary-rent', 'label' => 'اجاره روزانه/موقت'],
     ],
     'city_slugs' => require __DIR__ . '/provinces.php',
     'cities_file' => __DIR__ . '/cities.json',

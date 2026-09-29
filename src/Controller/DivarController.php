@@ -14,12 +14,13 @@ final class DivarController
 {
     private CurlHttpClient $http;
     private DivarClient $client;
-    private DivarSearchService $service;
+    private ?DivarSearchService $service = null;
 
     private array $provinces = [];
     private array $citySlugs = [];
     private array $cities = [];
     private array $divarCategories = [];
+    private array $cityNameToSlug = []; // Maps Persian city names to slugs
 
     private string $selectedProvince = '';
     private string $selectedCity = '';
@@ -64,7 +65,39 @@ final class DivarController
             Config::get('user_agent'),
             Config::get('city_slugs')
         );
-        $this->service = new DivarSearchService($this->client);
+    }
+
+    /**
+     * Get the Divar city ID from the selected city name (Persian).
+     * @param string $cityName Persian name of the city
+     * @return string Divar city ID
+     */
+    private function getDivarCityId(string $cityName): string
+    {
+        // First, get the slug from the city name using the city_slugs mapping
+        $citySlug = $this->citySlugs[$cityName] ?? '';
+        if ($citySlug === '') {
+            // Fallback: use the city name as slug (url encoded)
+            $citySlug = rawurlencode($cityName);
+        }
+        // Now look up the city info in the cities array (keyed by slug)
+        $cityInfo = $this->cities[$citySlug] ?? null;
+        return $cityInfo['city_id'] ?? '1'; // default to 1 if not found
+    }
+
+    /**
+     * Get the Divar city slug from the selected city name (Persian).
+     * @param string $cityName Persian name of the city
+     * @return string Divar city slug
+     */
+    private function getDivarCitySlug(string $cityName): string
+    {
+        $citySlug = $this->citySlugs[$cityName] ?? '';
+        if ($citySlug === '') {
+            $citySlug = rawurlencode($cityName);
+        }
+        $cityInfo = $this->cities[$citySlug] ?? null;
+        return $cityInfo['divar_slug'] ?? $citySlug;
     }
 
     private function loadData(): void
@@ -78,6 +111,9 @@ final class DivarController
 
     private function handleRequest(): void
     {
+        if (session_status() !== PHP_SESSION_ACTIVE) {
+            session_start();
+        }
         $this->selectedProvince = $_POST['province'] ?? '';
         $this->selectedCity = $_POST['city'] ?? '';
         $this->selectedCategory = $_POST['place'] ?? 'rent-temporary';
@@ -98,28 +134,459 @@ final class DivarController
                 );
                 return; // Exit early for AJAX call
             }
-
             if ($this->selectedCity) {
-                // Get Divar city slug from our cities mapping
-                $cityInfo = $this->cities[$this->selectedCity] ?? null;
-                $divarCitySlug = $cityInfo['divar_slug'] ?? $this->selectedCity;
+                $citySlug = $this->citySlugs[$this->selectedCity] ?? '';
+
+                if ($citySlug === '') {
+                    $citySlug = rawurlencode($this->selectedCity);
+                }
+
+                $cityInfo = $this->cities[$citySlug] ?? null;
+
+                $divarCitySlug = $cityInfo['divar_slug'] ?? $citySlug;
+
+                /*
+                 * IMPORTANT:
+                 * Do not silently use Tehran when city_id is missing.
+                 */
+                $divarCityId = $cityInfo['city_id'] ?? null;
+
+                if (!$divarCityId) {
+                    throw new \Exception(
+                        'Divar city_id not found for city: ' . $this->selectedCity
+                    );
+                }
 
                 try {
-                    // Default to 3 pages for more results, can be configured later
-                    $maxPages = 3;
-                    $result = $this->service->search($divarCitySlug, $this->selectedCategory, $this->selectedQuery, 1, $maxPages);
-                    $this->results = $result['success'] ? $result : null;
-                    $this->error = $result['success'] ? null : ($result['error'] ?? 'خطای ناشناخته');
+                    $this->service = new DivarSearchService(
+                        $this->http,
+                        $this->selectedQuery,
+                        $divarCityId,
+                        null,
+                        $this->selectedCategory,
+                        null
+                    );
 
-                    // Fetch existing call logs for these results
-                    if ($this->results && !empty($this->results['places'])) {
+                    /*
+                     * ---------------------------------------------------------
+                     * DIVAR CURSOR PAGINATION
+                     * ---------------------------------------------------------
+                     *
+                     * Divar does NOT use normal page numbers.
+                     *
+                     * Page 1:
+                     *     cursor = null
+                     *
+                     * Page 2:
+                     *     cursor = next_cursor returned by page 1
+                     *
+                     * Page 3:
+                     *     cursor = next_cursor returned by page 2
+                     *
+                     * etc.
+                     *
+                     * We keep those cursors in PHP session so the user can
+                     * navigate backwards and forwards.
+                     */
+
+                    $requestedPage = max(
+                        1,
+                        (int)($_POST['page'] ?? 1)
+                    );
+
+                    /*
+                     * Create a unique key for this exact Divar search.
+                     *
+                     * Changing city/query/category creates a different pagination
+                     * history automatically.
+                     */
+                    $divarSearchKey = hash(
+                        'sha256',
+                        implode('|', [
+                            'divar',
+                            $divarCityId,
+                            $this->selectedCity,
+                            $this->selectedCategory,
+                            $this->selectedQuery,
+                        ])
+                    );
+
+                    /*
+                     * Initialize the session storage.
+                     */
+                    if (!isset($_SESSION['divar_pagination'])) {
+                        $_SESSION['divar_pagination'] = [];
+                    }
+
+                    /*
+                     * If this is page 1, this is a NEW search.
+                     *
+                     * Reset the cursor history for this search.
+                     */
+                    if ($requestedPage === 1) {
+                        $_SESSION['divar_pagination'][$divarSearchKey] = [
+                            'cursors' => [
+                                1 => null,
+                            ],
+                            'has_next' => [],
+                        ];
+                    }
+
+                    /*
+                     * Make sure this search has pagination state.
+                     */
+                    if (
+                        !isset(
+                            $_SESSION['divar_pagination'][$divarSearchKey]
+                        )
+                    ) {
+                        $_SESSION['divar_pagination'][$divarSearchKey] = [
+                            'cursors' => [
+                                1 => null,
+                            ],
+                            'has_next' => [],
+                        ];
+                    }
+
+                    $paginationState =
+            &$_SESSION['divar_pagination'][$divarSearchKey];
+
+                    /*
+                     * We can only request a page if we already know the cursor
+                     * required to reach it.
+                     *
+                     * For example:
+                     *
+                     * page 1 -> cursor null
+                     * page 2 -> cursor from page 1
+                     * page 3 -> cursor from page 2
+                     */
+                    $cursor =
+                        $paginationState['cursors'][$requestedPage]
+                        ?? null;
+
+                    /*
+                     * If someone manually requests page 10 before pages 2-9
+                     * have been loaded, don't send an invalid request to Divar.
+                     */
+                    if (
+                        $requestedPage > 1 &&
+                        !array_key_exists(
+                            $requestedPage,
+                            $paginationState['cursors']
+                        )
+                    ) {
+                        $requestedPage = 1;
+
+                        $paginationState = [
+                            'cursors' => [
+                                1 => null,
+                            ],
+                            'has_next' => [],
+                        ];
+
+                        $_SESSION['divar_pagination'][$divarSearchKey] =
+                            $paginationState;
+
+                        $paginationState =
+                &$_SESSION['divar_pagination'][$divarSearchKey];
+
+                        $cursor = null;
+                    }
+
+                    /*
+                     * IMPORTANT:
+                     *
+                     * Only fetch ONE Divar page per HTTP request.
+                     *
+                     * DivarSearchService already has:
+                     *
+                     *     MAX_DIVAR_PAGES_PER_REQUEST = 1
+                     *
+                     * so we should NOT loop here.
+                     */
+                    $pageResult = $this->service->searchPage(
+                        $cursor,
+                        24
+                    );
+
+                    if (!$pageResult['success']) {
+                        throw new \Exception(
+                            'Divar search page failed: ' .
+                            ($pageResult['error'] ?? 'Unknown error')
+                        );
+                    }
+
+                    $ads = $pageResult['ads'] ?? [];
+
+                    $pagination =
+                        $pageResult['pagination'] ?? [];
+
+                    $hasNextPage =
+                        (bool)($pagination['has_next_page'] ?? false);
+
+                    $nextCursor =
+                        $pagination['next_cursor'] ?? null;
+
+                    /*
+                     * Store whether this page has another page.
+                     */
+                    $paginationState['has_next'][$requestedPage] =
+                        $hasNextPage;
+
+                    /*
+                     * Store the cursor needed to reach the NEXT page.
+                     *
+                     * Example:
+                     *
+                     * page 1 returns CURSOR_A
+                     *
+                     * store:
+                     *
+                     *     cursors[2] = CURSOR_A
+                     *
+                     * Then page 2 can use CURSOR_A.
+                     */
+                    if (
+                        $hasNextPage &&
+                        is_string($nextCursor) &&
+                        $nextCursor !== ''
+                    ) {
+                        $paginationState['cursors'][$requestedPage + 1] =
+                            $nextCursor;
+                    } else {
+                        /*
+                         * No next page.
+                         */
+                        unset(
+                            $paginationState['cursors'][$requestedPage + 1]
+                        );
+                    }
+
+                    /*
+                     * Keep only a reasonable amount of cursor history.
+                     *
+                     * This prevents the PHP session from growing forever if
+                     * someone browses hundreds of pages.
+                     */
+                    if (count($paginationState['cursors']) > 30) {
+                        $pageNumbers =
+                            array_keys($paginationState['cursors']);
+
+                        sort($pageNumbers);
+
+                        while (
+                            count($pageNumbers) > 30
+                        ) {
+                            /*
+                             * Never remove page 1.
+                             */
+                            $pageToRemove =
+                                $pageNumbers[1] ?? null;
+
+                            if ($pageToRemove === null) {
+                                break;
+                            }
+
+                            unset(
+                                $paginationState['cursors'][$pageToRemove]
+                            );
+
+                            unset(
+                                $paginationState['has_next'][$pageToRemove]
+                            );
+
+                            $pageNumbers =
+                                array_keys($paginationState['cursors']);
+
+                            sort($pageNumbers);
+                        }
+                    }
+
+                    /*
+                     * Determine whether the previous page is available.
+                     */
+                    $canGoPrevious =
+                        $requestedPage > 1 &&
+                        isset(
+                            $paginationState['cursors'][$requestedPage - 1]
+                        );
+
+                    /*
+                     * Determine which page numbers are already known.
+                     *
+                     * We don't know Divar's TOTAL number of pages.
+                     * We only know pages we have reached so far.
+                     */
+                    $knownPages =
+                        array_keys($paginationState['cursors']);
+
+                    $knownPages = array_map(
+                        'intval',
+                        $knownPages
+                    );
+
+                    sort($knownPages);
+
+                    $knownLastPage =
+                        !empty($knownPages)
+                            ? max($knownPages)
+                            : 1;
+
+                    /*
+                     * The page we just loaded may be the final page, meaning
+                     * there is no cursor for the next page.
+                     */
+                    if (!$hasNextPage) {
+                        $knownLastPage =
+                            max(
+                                1,
+                                $requestedPage
+                            );
+                    }
+
+                    /*
+                     * IMPORTANT:
+                     *
+                     * We intentionally don't claim to know Divar's total.
+                     *
+                     * SearchView's generic pagination needs totalPages, so for
+                     * Divar we provide the highest currently reachable page.
+                     * The actual Divar pagination UI below will use
+                     * divar_has_next_page instead.
+                     */
+                    $this->results = [
+                        'success' => true,
+
+                        'places' => $ads,
+
+                        'total' => count($ads),
+
+                        'page' => $requestedPage,
+
+                        /*
+                         * Used by generic SearchView code.
+                         */
+                        'page_count' => $knownLastPage,
+
+                        'title' =>
+                            $this->selectedCategory .
+                            ' در ' .
+                            $this->selectedCity,
+
+                        /*
+                         * Divar-specific pagination information.
+                         */
+                        'divar_has_next_page' => $hasNextPage,
+
+                        'divar_current_page' => $requestedPage,
+
+                        'divar_can_go_previous' => $canGoPrevious,
+
+                        'divar_search_key' => $divarSearchKey,
+
+                        'divar_known_last_page' => $knownLastPage,
+
+                        'divar_next_cursor' => $nextCursor,
+                    ];
+
+                    $this->error = null;
+
+                    if (
+                        $this->results &&
+                        !empty($this->results['places'])
+                    ) {
                         $this->loadExistingCallLogs();
                     }
+
                 } catch (\Exception $e) {
-                    Logger::error('Divar Search failed', ['error' => $e->getMessage()]);
-                    $this->error = 'خطا در ارتباط با دیوار';
+                    Logger::error(
+                        'Divar Search failed',
+                        [
+                            'error' => $e->getMessage(),
+                        ]
+                    );
+
+                    $this->error =
+                        'خطا در ارتباط با دیوار';
+
+                    $this->results = null;
                 }
             }
+
+//            if ($this->selectedCity) {
+//                // Get Divar city slug and ID from the selected city name (Persian)
+//                $citySlug = $this->citySlugs[$this->selectedCity] ?? '';
+//                if ($citySlug === '') {
+//                    $citySlug = rawurlencode($this->selectedCity);
+//                }
+//                $cityInfo = $this->cities[$citySlug] ?? null;
+//                $divarCitySlug = $cityInfo['divar_slug'] ?? $citySlug;
+//                $divarCityId = $cityInfo['city_id'] ?? '1';
+//
+//                try {
+//                    // Create the Divar search service with the current selections
+//                    $this->service = new DivarSearchService(
+//                        $this->http,
+//                        $this->selectedQuery,
+//                        $divarCityId,
+//                        null, // authManager
+//                        $this->selectedCategory,
+//                        null  // bbox
+//                    );
+//
+//                    // Fetch up to $maxPages pages
+//                    $maxPages = 3;
+//                    $allAds = [];
+//                    $cursor = null;
+//                    $pagesFetched = 0;
+//                    $hasNextPage = false;
+//
+//                    do {
+//                        $pageResult = $this->service->searchPage($cursor, 24);
+//                        echo '<pre>';
+//                        print_r([
+//                            'count' => count($pageResult['ads'] ?? []),
+//                            'pagination' => $pageResult['pagination'] ?? null,
+//                        ]);
+//                        echo '</pre>';
+//                        exit;
+//                        if (!$pageResult['success']) {
+//                            throw new \Exception('Divar search page failed: ' . ($pageResult['error'] ?? 'Unknown error'));
+//                        }
+//
+//                        $ads = $pageResult['ads'] ?? [];
+//                        $allAds = array_merge($allAds, $ads);
+//
+//                        $pagination = $pageResult['pagination'] ?? [];
+//                        $hasNextPage = $pagination['has_next_page'] ?? false;
+//                        $cursor = $pagination['next_cursor'] ?? null;
+//
+//                        $pagesFetched++;
+//                    } while ($hasNextPage && $pagesFetched < $maxPages && $cursor !== null);
+//
+//                    // Prepare the result array to match the expected format
+//                    $this->results = [
+//                        'success' => true,
+//                        'places' => $allAds,
+//                        'total' => count($allAds),
+//                        'page' => 1, // we are presenting all fetched pages as one set of results
+//                        'page_count' => 1, // we don't have total pages from Divar in terms of UI pagination
+//                        'title' => $this->selectedCategory . ' در ' . $this->selectedCity,
+//                    ];
+//
+//                    $this->error = null;
+//
+//                    // Fetch existing call logs for these results
+//                    if ($this->results && !empty($this->results['places'])) {
+//                        $this->loadExistingCallLogs();
+//                    }
+//                } catch (\Exception $e) {
+//                    Logger::error('Divar Search failed', ['error' => $e->getMessage()]);
+//                    $this->error = 'خطا در ارتباط با دیوار';
+//                    $this->results = null;
+//                }
+//            }
         }
     }
 

@@ -9,6 +9,8 @@ use Src\Exceptions\NeshanRequestException;
  * 
  * Since Neshan APIs are restricted, we use a Python script with Chromium-like
  * headers to simulate a real browser and scrape the search results.
+ * 
+ * Fixed: Default to headless mode for server execution
  */
 final class NeshanClient
 {
@@ -19,7 +21,7 @@ final class NeshanClient
     public function __construct(
         string $pythonScriptPath,
         string $pythonExecutable = 'python',
-        int $timeout = 60
+        int $timeout = 120
     ) {
         $this->pythonScriptPath = $pythonScriptPath;
         $this->pythonExecutable = $pythonExecutable;
@@ -32,7 +34,7 @@ final class NeshanClient
      * @param string $citySlug URL-safe city identifier (e.g. 'tehran')
      * @param string $category Category value from categories.php (e.g. 'hotel')
      * @param int $page Page number
-     * @return array ['success' => true, 'tokens' => [...], ...] or ['success' => false, 'error' => '...']
+     * @return array ['success' => true, 'places' => [...], ...] or ['success' => false, 'error' => '...']
      */
     public function search(string $citySlug, string $category, int $page = 1): array
     {
@@ -40,11 +42,12 @@ final class NeshanClient
         $cityName = $this->slugToCityName($citySlug);
         
         $cmd = sprintf(
-            '%s "%s" --city "%s" --category "%s" --max-results 20 --output - 2>&1',
+            '%s "%s" --city "%s" --category "%s" --max-results 20 --page %d --output - 2>&1',
             escapeshellarg($this->pythonExecutable),
             escapeshellarg($this->pythonScriptPath),
             escapeshellarg($cityName),
-            escapeshellarg($category)
+            escapeshellarg($category),
+            $page
         );
 
         $output = [];
@@ -76,6 +79,20 @@ final class NeshanClient
         
         $returnVar = proc_close($process);
         
+        // Check for Python errors
+        if ($returnVar !== 0) {
+            error_log("Neshan Python exited with code: $returnVar, stderr: $stderr");
+            return [
+                'success' => false, 
+                'error' => 'Python script failed',
+                'stderr' => $stderr,
+                'places' => [],
+                'total' => 0,
+                'page' => $page,
+                'page_count' => 1,
+            ];
+        }
+        
         // Parse JSON from stdout (last line should be JSON)
         $lines = explode("\n", $stdout);
         $jsonLine = '';
@@ -89,15 +106,40 @@ final class NeshanClient
         
         if ($jsonLine) {
             $data = json_decode($jsonLine, true);
+            
+            // Check for Python script errors
+            if (isset($data['error'])) {
+                error_log("Neshan Python error: " . $data['error']);
+                return [
+                    'success' => false,
+                    'error' => $data['error'],
+                    'places' => [],
+                    'total' => 0,
+                    'page' => $page,
+                    'page_count' => 1,
+                ];
+            }
+            
             if (json_last_error() === JSON_ERROR_NONE && isset($data[$category])) {
                 $places = $data[$category] ?? [];
+                
+                // Get pagination info
+                $pagination = $data['_pagination'][$category] ?? ['has_more' => false, 'page' => $page];
+                $hasMore = $pagination['has_more'] ?? false;
+                $currentPage = $pagination['page'] ?? $page;
+                
+                // Calculate total pages (estimate based on total results and max per page)
+                $perPage = 20;
+                $pageCount = $hasMore ? ceil(count($places) / $perPage) : ($currentPage > 1 ? $currentPage : 1);
+                
                 return [
                     'success' => true,
-                    'tokens' => array_map(fn($p) => $p['name'] ?? '', $places),
-                    'title' => $category,
-                    'page_count' => 1,
+                    'places' => $places,
                     'total' => count($places),
-                    '_raw_places' => $places, // Pass raw places to avoid re-fetching
+                    'page' => $currentPage,
+                    'page_count' => $pageCount,
+                    'has_more' => $hasMore,
+                    'total_results' => count($places),
                 ];
             }
         }
@@ -107,29 +149,60 @@ final class NeshanClient
             error_log("Neshan Python stderr: $stderr");
         }
         
-        // Return success with empty results for consistent "no results" handling
+        // Return empty results for consistent handling
         return [
             'success' => true,
-            'tokens' => [],
-            'title' => $category,
-            'page_count' => 1,
+            'places' => [],
             'total' => 0,
-            '_raw_places' => [],
+            'page' => $page,
+            'page_count' => 1,
+            'has_more' => false,
+            'total_results' => 0,
         ];
     }
 
     /**
-     * Get details for places - but since Python script already returns full details,
-     * we just return what we already have
+     * Fetch all results across all pages (for complete data export)
      * 
-     * @param array $tokens Not used for Neshan (we already have full data)
-     * @return array ['success' => true, 'items' => [...places...]]
+     * @param string $citySlug URL-safe city identifier
+     * @param string $category Category value
+     * @return array All places across all pages
      */
-    public function getDetails(array $tokens): array
+    public function searchAllPages(string $citySlug, string $category): array
     {
-        // The search() method already returns full place details in _raw_places
-        // This method exists for interface compatibility with BaladClient
-        return ['success' => true, 'items' => []];
+        $allPlaces = [];
+        $page = 1;
+        $hasMore = true;
+        $maxPages = 50; // Safety limit to prevent infinite loops
+        
+        while ($hasMore && $page <= $maxPages) {
+            $result = $this->search($citySlug, $category, $page);
+            
+            if (!$result['success']) {
+                break;
+            }
+            
+            $places = $result['places'] ?? [];
+            $allPlaces = array_merge($allPlaces, $places);
+            
+            $hasMore = $result['has_more'] ?? false;
+            $page++;
+            
+            // Small delay between pages to avoid overloading
+            if ($hasMore) {
+                usleep(500000); // 0.5 second
+            }
+        }
+        
+        return [
+            'success' => true,
+            'places' => $allPlaces,
+            'total' => count($allPlaces),
+            'page' => $page - 1,
+            'page_count' => $page - 1,
+            'has_more' => false,
+            'total_results' => count($allPlaces),
+        ];
     }
 
     /**

@@ -2,6 +2,8 @@
 Neshan Search App - Searches categories defined in config/categories.php
 Uses Playwright with system Chromium to simulate a real user and extract results from DOM.
 Outputs clean JSON to stdout for PHP integration.
+
+Fixed: Default to headless mode for server execution
 """
 
 import json
@@ -90,13 +92,14 @@ class NeshanSearcher:
     BASE_URL = "https://neshan.org"
     SEARCH_URL = "https://neshan.org/maps/search"
     
-    def __init__(self, headless: bool = False, slow_mo: int = 100):
+    def __init__(self, headless: bool = True, slow_mo: int = 100):
         self.headless = headless
         self.slow_mo = slow_mo
         self.chrome_path = r'C:\Program Files\Google\Chrome\Application\chrome.exe'
     
-    def search_category(self, category: Category, city: str = "تهران", max_results: int = 20) -> List[PlaceResult]:
-        """Search for a specific category in a city on Neshan"""
+    def search_category(self, category: Category, city: str = "تهران", max_results: int = 20, page: int = 1) -> dict:
+        """Search for a specific category in a city on Neshan
+        Returns dict with 'results' (List[PlaceResult]), 'has_more' (bool), 'page' (int)"""
         results = []
         
         with sync_playwright() as p:
@@ -122,7 +125,7 @@ class NeshanSearcher:
             )
             
             try:
-                page = browser.new_page(
+                page_obj = browser.new_page(
                     user_agent=(
                         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
                         'AppleWebKit/537.36 (KHTML, like Gecko) '
@@ -134,75 +137,121 @@ class NeshanSearcher:
                 )
                 
                 # Add stealth scripts
-                page.add_init_script("""
+                page_obj.add_init_script("""
                     Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
                     window.chrome = { runtime: {} };
                 """)
                 
                 # Go to search page
-                page.goto(self.SEARCH_URL, wait_until='networkidle', timeout=60000)
-                # Wait longer in headless mode
-                wait_time = 5000 if self.headless else 3000
-                page.wait_for_timeout(wait_time)
+                page_obj.goto(self.SEARCH_URL, wait_until='networkidle', timeout=60000)
+                # Wait longer in headless mode for page to fully render
+                wait_time = 8000 if self.headless else 3000
+                page_obj.wait_for_timeout(wait_time)
                 
-                # Find and use search input - wait for it to appear
-                search_input = None
-                for _ in range(10):  # Wait up to 10 seconds
-                    search_input = page.query_selector('input[type="search"]')
-                    if search_input:
-                        break
-                    page.wait_for_timeout(1000)
+                # Try to close cookie consent popup if present
+                try:
+                    cookie_selectors = [
+                        'button:has-text("بستن")',
+                        'button:has-text("خیر")',
+                        'button:has-text("Reject")',
+                        'button:has-text("Close")',
+                        '[class*="cookie"] button',
+                        '[class*="popup"] button',
+                        '.close-button',
+                        '[aria-label*="بستن"]',
+                    ]
+                    for selector in cookie_selectors:
+                        cookie_btn = page_obj.query_selector(selector)
+                        if cookie_btn:
+                            cookie_btn.click()
+                            page_obj.wait_for_timeout(1000)
+                            break
+                except:
+                    pass
                 
-                if not search_input:
-                    print("Error: Search input not found after waiting", file=sys.stderr)
-                    browser.close()
-                    return results
-                
+                # Navigate directly to search URL
                 search_query = f"{category.label} {city}"
                 print(f"Searching: {search_query}", file=sys.stderr)
                 
-                search_input.fill(search_query)
-                page.wait_for_timeout(2000)
-                search_input.press('Enter')
+                # URL encode the search query
+                encoded_query = quote_plus(search_query)
+                search_url = f"{self.SEARCH_URL}/{encoded_query}"
                 
-                # Wait for results to load (map markers and popups)
-                page.wait_for_timeout(8000)
+                # Navigate directly to search URL
+                page_obj.goto(search_url, wait_until='networkidle', timeout=60000)
+                
+                # Wait for results to load
+                page_obj.wait_for_timeout(15000)
+                
+                # Scroll to load more pages if needed
+                if page > 1:
+                    print(f"Scrolling to load page {page}...", file=sys.stderr)
+                    for p_num in range(page - 1):
+                        # Scroll down to trigger loading more results
+                        page_obj.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                        page_obj.wait_for_timeout(3000)
+                        # Also try scrolling the map container
+                        page_obj.evaluate("""
+                            const mapContainer = document.querySelector('.mapboxgl-map') || 
+                                               document.querySelector('[class*="map"]') || 
+                                               document.body;
+                            mapContainer.scrollTop = mapContainer.scrollHeight;
+                        """)
+                        page_obj.wait_for_timeout(2000)
                 
                 # Extract results from DOM
-                results = self._extract_results_from_dom(page, category, max_results)
+                results = self._extract_results_from_dom(page_obj, category, max_results)
                 
             except Exception as e:
                 print(f"Error during search: {e}", file=sys.stderr)
             finally:
                 browser.close()
         
-        return results
-    
+        return {
+            'results': results,
+            'has_more': len(results) >= max_results,
+            'page': page,
+        }
+
     def _extract_results_from_dom(self, page, category: Category, max_results: int) -> List[PlaceResult]:
         """Extract place results from the rendered DOM"""
         results = []
         
         try:
-            # The results appear as map markers with class patterns like nrFZBE4, VtOzPyM, QDSxX77
-            # They contain hotel name, rating, address, and action buttons
-            # Strategy: Find elements that look like result cards (have rating, address, name)
-            
-            # Look for elements with specific class patterns that contain results
-            # These are the map marker popups
-            marker_selectors = [
-                '[class*="search_result_popup"]',
-                '[class*="mapboxgl-popup"]',
-                'div[class*="result"]',
-            ]
-            
-            # Also search for elements containing the category label
-            elements = page.query_selector_all(f'*:has-text("{category.label}")')
-            print(f"Found {len(elements)} elements containing '{category.label}'", file=sys.stderr)
+            # Strategy: Find individual result cards by looking for elements that:
+            # 1. Have a rating pattern (X,Y رای)
+            # 2. Have address keywords
+            # 3. Are not huge containers with all results
             
             seen_names = set()
-            noise_words = {'حذف', 'باز باشد', 'بازباشد', 'مسیرها', 'وب‌سایت', 'تماس', 'ارسال', 'پشتیبانی', 'نظر', 'اشتراک', 'گزارش', 'مشترک', 'نقشه', 'مسیریاب', 'دانلود', 'برنامه', 'نسخه', 'وب', 'جستجوی', 'جستجو', 'امتیاز', 'رای', 'بازدید', 'محبوب', 'جدید', 'پیشنهاد'}
+            noise_words = {'حذف', 'باز باشد', 'بازباشد', 'مسیرها', 'وب‌سایت', 'تماس', 'ارسال', 'پشتیبانی', 'نظر', 'اشتراک', 'گزارش', 'مشترک', 'نقشه', 'مسیریاب', 'دانلود', 'برنامه', 'نسخه', 'وب', 'جستجوی', 'جستجو', 'امتیاز', 'رای', 'بازدید', 'محبوب', 'جدید', 'پیشنهاد', 'آگهی'}
             
-            for el in elements:
+            # First try: look for elements with rating pattern
+            # These are likely individual result cards
+            rating_elements = page.query_selector_all('*:has-text("رای")')
+            print(f"Found {len(rating_elements)} elements containing 'رای'", file=sys.stderr)
+            
+            # Also get elements with category label as fallback
+            category_elements = page.query_selector_all(f'*:has-text("{category.label}")')
+            print(f"Found {len(category_elements)} elements containing '{category.label}'", file=sys.stderr)
+            
+            # Combine and deduplicate elements
+            all_elements = []
+            seen_element_ids = set()
+            for el_list in [rating_elements, category_elements]:
+                for el in el_list:
+                    try:
+                        # Use element handle as identifier
+                        el_id = id(el)
+                        if el_id not in seen_element_ids:
+                            seen_element_ids.add(el_id)
+                            all_elements.append(el)
+                    except:
+                        pass
+            
+            print(f"Total unique elements to process: {len(all_elements)}", file=sys.stderr)
+            
+            for el in all_elements:
                 if len(results) >= max_results:
                     break
                     
@@ -211,11 +260,18 @@ class NeshanSearcher:
                     if not text or len(text) < 15:
                         continue
                     
+                    # Skip huge container elements (likely the full results list)
+                    if len(text) > 2000:
+                        if len(results) < 3:
+                            print(f"DEBUG Skipping huge element (len={len(text)})", file=sys.stderr)
+                        continue
+                    
                     # Check if this looks like a result card
                     lines = [line.strip() for line in text.split('\n') if line.strip()]
                     
-                    if len(lines) < 3:
-                        continue
+                    # Accept elements with at least 1 line (the name)
+                    
+                    # print(f"DEBUG Processing element (len={len(text)}, lines={len(lines)}): first line='{lines[0]}'", file=sys.stderr)
                     
                     # First non-noise line should be the name
                     name = None
@@ -239,16 +295,34 @@ class NeshanSearcher:
                     if len(name) < 3 or len(name) > 100:
                         continue
                     
-                    # Skip if name contains only UI words
-                    if any(nw in name for nw in noise_words):
+                    # Skip if name contains noise words (use word boundary-aware check)
+                    name_words = name.split()
+                    skip = False
+                    for nw in noise_words:
+                        if nw in name_words:  # Exact word match
+                            skip = True
+                            break
+                        # Also check if noise word is a standalone word in the name
+                        # (surrounded by spaces or at start/end)
+                        if f' {nw} ' in f' {name} ' or name.startswith(nw + ' ') or name.endswith(' ' + nw):
+                            skip = True
+                            break
+                    if skip:
                         continue
+                    
+                    # Accept any valid name (simplified for headless mode)
+                    # No minimum line requirement - just need a valid name
                     
                     # Try to extract rating
                     rating = None
                     for line in lines:
-                        rating_match = re.search(r'(\d+[.,]\d+)\s*رای', line)
+                        # Match both "33 رای" and "33.5 رای" patterns
+                        rating_match = re.search(r'(\d+[.,]?\d*)\s*رای', line)
                         if rating_match:
-                            rating = float(rating_match.group(1).replace(',', '.'))
+                            try:
+                                rating = float(rating_match.group(1).replace(',', '.'))
+                            except:
+                                rating = None
                             break
                     
                     # Try to find address (usually contains Persian street/city names)
@@ -276,7 +350,6 @@ class NeshanSearcher:
                             # Check if it's an Instagram link
                             if 'instagram.com' in href:
                                 # Extract Instagram username from URL
-                                import re
                                 ig_match = re.search(r'instagram\.com/([^/?#]+)', href)
                                 if ig_match:
                                     instagram_id = ig_match.group(1)
@@ -321,10 +394,11 @@ def main():
     parser.add_argument('--city', default='تهران', help='City to search in (Persian name)')
     parser.add_argument('--category', help='Specific category to search (value from categories.php)')
     parser.add_argument('--max-results', type=int, default=20, help='Max results per category')
+    parser.add_argument('--page', type=int, default=1, help='Page number to fetch (each page loads more results by scrolling)')
     parser.add_argument('--output', help='Output JSON file path (use - for stdout)')
-    parser.add_argument('--headless', action='store_true', help='Run headless (default: False - headed mode works better)')
+    parser.add_argument('--headless', action='store_true', help='Run headless (default: True for server)')
     parser.add_argument('--no-headless', action='store_false', dest='headless', help='Run with visible browser (default)')
-    parser.set_defaults(headless=False)
+    parser.set_defaults(headless=True)
     parser.add_argument('--slow-mo', type=int, default=100, help='Slow motion delay (ms)')
     
     args = parser.parse_args()
@@ -346,9 +420,15 @@ def main():
     searcher = NeshanSearcher(headless=args.headless, slow_mo=args.slow_mo)
     
     all_results = {}
+    pagination_info = {}
     for category in categories:
         print(f"\nSearching category: {category.label} ({category.value})", file=sys.stderr)
-        results = searcher.search_category(category, args.city, args.max_results)
+        result_data = searcher.search_category(category, args.city, args.max_results, args.page)
+        results = result_data['results']
+        pagination_info[category.value] = {
+            'has_more': result_data['has_more'],
+            'page': result_data['page'],
+        }
         all_results[category.value] = results
         print(f"Found {len(results)} results", file=sys.stderr)
         
@@ -360,6 +440,9 @@ def main():
     output_data = {}
     for cat_value, places in all_results.items():
         output_data[cat_value] = [asdict(p) for p in places]
+    
+    # Include pagination info in output
+    output_data['_pagination'] = pagination_info
     
     # Output JSON (compact, single line for PHP parsing)
     json_output = json.dumps(output_data, ensure_ascii=False, separators=(',', ':'))

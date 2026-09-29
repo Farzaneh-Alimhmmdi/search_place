@@ -17,6 +17,9 @@ final class SearchView
     private array $provinceCities = [];
     private array $allProvinceCities = [];
     private array $existingCallLogs = [];
+    private int $currentPage = 1;
+    private int $totalPages = 1;
+    private int $totalResults = 0;
 
     public function __construct(
         array $provinces,
@@ -30,7 +33,10 @@ final class SearchView
         string $selectedProvince = '',
         array $provinceCities = [],
         array $allProvinceCities = [],
-        string $selectedQuery = ''
+        string $selectedQuery = '',
+        int $currentPage = 1,
+        int $totalPages = 1,
+        int $totalResults = 0
     ) {
         $this->provinces = $provinces;
         $this->categories = $categories;
@@ -44,6 +50,9 @@ final class SearchView
         $this->selectedQuery = $selectedQuery;
         $this->provinceCities = $provinceCities;
         $this->allProvinceCities = $allProvinceCities;
+        $this->currentPage = max(1, $currentPage);
+        $this->totalPages = max(1, $totalPages);
+        $this->totalResults = $totalResults;
     }
 
     public function setExistingCallLogs(array $logs): void
@@ -477,6 +486,7 @@ final class SearchView
                     </div>
                     <form method="POST" id="searchForm">
                         <input type="hidden" name="provider" value="<?= htmlspecialchars($this->provider) ?>">
+                        <input type="hidden" name="page" id="pageInput" value="1">
                         <div class="form-row">
                             <div class="form-group">
                                 <label>منبع جستجو</label>
@@ -737,6 +747,480 @@ final class SearchView
                                 </div>
                             <?php endforeach; ?>
                         </div>
+                        <?php if ($this->provider === 'divar'): ?>
+
+                            <?php
+                            /*
+                             * ---------------------------------------------------------
+                             * DIVAR CURSOR PAGINATION
+                             * ---------------------------------------------------------
+                             *
+                             * Divar does not expose a normal "total pages" value.
+                             *
+                             * Instead:
+                             *
+                             *     page 1 -> next_cursor -> page 2
+                             *     page 2 -> next_cursor -> page 3
+                             *     page 3 -> next_cursor -> page 4
+                             *
+                             * The controller stores these cursors in the PHP session.
+                             */
+
+                            $divarHasNextPage =
+                                    (bool)($this->results['divar_has_next_page'] ?? false);
+
+                            $divarCurrentPage =
+                                    max(
+                                            1,
+                                            (int)($this->results['divar_current_page'] ?? $this->currentPage)
+                                    );
+
+                            $divarCanGoPrevious =
+                                    (bool)($this->results['divar_can_go_previous'] ?? false);
+
+                            $divarKnownLastPage =
+                                    max(
+                                            $divarCurrentPage,
+                                            (int)($this->results['divar_known_last_page'] ?? $divarCurrentPage)
+                                    );
+                            ?>
+
+                            <?php if ($divarCurrentPage > 1 || $divarHasNextPage): ?>
+
+                                <div
+                                        class="pagination"
+                                        style="
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                gap: 12px;
+                margin-top: 24px;
+                padding: 16px 0;
+                flex-wrap: wrap;
+            "
+                                >
+
+                                    <!-- Previous -->
+                                    <form method="POST" style="display: inline;">
+
+                                        <input
+                                                type="hidden"
+                                                name="provider"
+                                                value="<?= htmlspecialchars($this->provider) ?>"
+                                        >
+
+                                        <input
+                                                type="hidden"
+                                                name="city"
+                                                value="<?= htmlspecialchars($this->selectedCity) ?>"
+                                        >
+
+                                        <input
+                                                type="hidden"
+                                                name="place"
+                                                value="<?= htmlspecialchars($this->selectedCategory) ?>"
+                                        >
+
+                                        <input
+                                                type="hidden"
+                                                name="query"
+                                                value="<?= htmlspecialchars($this->selectedQuery) ?>"
+                                        >
+
+                                        <input
+                                                type="hidden"
+                                                name="page"
+                                                value="<?= max(1, $divarCurrentPage - 1) ?>"
+                                        >
+
+                                        <button
+                                                type="submit"
+                                                class="btn-link btn-link-primary"
+                                                <?= !$divarCanGoPrevious ? 'disabled' : '' ?>
+                                                style="
+                                                <?= !$divarCanGoPrevious
+                                                        ? 'opacity: 0.5; cursor: not-allowed;'
+                                                        : ''
+                                                ?>
+                                                        "
+                                        >
+                                            ← صفحه قبلی
+                                        </button>
+
+                                    </form>
+
+
+                                    <!-- Current page -->
+                                    <div
+                                            class="pagination-info"
+                                            style="
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    font-size: 14px;
+                    color: #555;
+                "
+                                    >
+
+                <span>
+                    صفحه <?= $divarCurrentPage ?>
+                </span>
+
+                                        <?php if ($this->totalResults > 0): ?>
+
+                                            <span style="color: #888;">
+                        (<?= $this->totalResults ?> نتیجه در این صفحه)
+                    </span>
+
+                                        <?php endif; ?>
+
+                                    </div>
+
+
+                                    <!-- Next -->
+                                    <form method="POST" style="display: inline;">
+
+                                        <input
+                                                type="hidden"
+                                                name="provider"
+                                                value="<?= htmlspecialchars($this->provider) ?>"
+                                        >
+
+                                        <input
+                                                type="hidden"
+                                                name="city"
+                                                value="<?= htmlspecialchars($this->selectedCity) ?>"
+                                        >
+
+                                        <input
+                                                type="hidden"
+                                                name="place"
+                                                value="<?= htmlspecialchars($this->selectedCategory) ?>"
+                                        >
+
+                                        <input
+                                                type="hidden"
+                                                name="query"
+                                                value="<?= htmlspecialchars($this->selectedQuery) ?>"
+                                        >
+
+                                        <input
+                                                type="hidden"
+                                                name="page"
+                                                value="<?= $divarCurrentPage + 1 ?>"
+                                        >
+
+                                        <button
+                                                type="submit"
+                                                class="btn-link btn-link-primary"
+                                                <?= !$divarHasNextPage ? 'disabled' : '' ?>
+                                                style="
+                                                <?= !$divarHasNextPage
+                                                        ? 'opacity: 0.5; cursor: not-allowed;'
+                                                        : ''
+                                                ?>
+                                                        "
+                                        >
+                                            صفحه بعدی →
+                                        </button>
+
+                                    </form>
+
+                                </div>
+
+                            <?php endif; ?>
+
+
+                        <?php elseif ($this->totalPages > 1): ?>
+
+                            <!--
+                                EXISTING BALAD / NEShan / GOOGLE PAGINATION
+
+                                DO NOT CHANGE THIS PART.
+                            -->
+
+                            <div
+                                    class="pagination"
+                                    style="
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 8px;
+            margin-top: 24px;
+            padding: 16px 0;
+            flex-wrap: wrap;
+        "
+                            >
+
+                                <form method="POST" style="display: inline;">
+
+                                    <input
+                                            type="hidden"
+                                            name="provider"
+                                            value="<?= htmlspecialchars($this->provider) ?>"
+                                    >
+
+                                    <input
+                                            type="hidden"
+                                            name="city"
+                                            value="<?= htmlspecialchars($this->selectedCity) ?>"
+                                    >
+
+                                    <input
+                                            type="hidden"
+                                            name="place"
+                                            value="<?= htmlspecialchars($this->selectedCategory) ?>"
+                                    >
+
+                                    <input
+                                            type="hidden"
+                                            name="page"
+                                            value="<?= max(1, $this->currentPage - 1) ?>"
+                                    >
+
+                                    <button
+                                            type="submit"
+                                            class="btn-link btn-link-primary"
+                                            <?= $this->currentPage <= 1 ? 'disabled' : '' ?>
+                                            style="
+                                            <?= $this->currentPage <= 1
+                                                    ? 'opacity: 0.5; cursor: not-allowed;'
+                                                    : ''
+                                            ?>
+                                                    "
+                                    >
+                                        ← صفحه قبلی
+                                    </button>
+
+                                </form>
+
+
+                                <div
+                                        class="pagination-info"
+                                        style="
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                font-size: 14px;
+                color: #555;
+            "
+                                >
+
+            <span>
+                صفحه <?= $this->currentPage ?>
+                از <?= $this->totalPages ?>
+            </span>
+
+                                    <?php if ($this->totalResults > 0): ?>
+
+                                        <span style="color: #888;">
+                    (مجموع <?= $this->totalResults ?> نتیجه)
+                </span>
+
+                                    <?php endif; ?>
+
+
+                                    <?php
+                                    $startPage =
+                                            max(
+                                                    1,
+                                                    $this->currentPage - 2
+                                            );
+
+                                    $endPage =
+                                            min(
+                                                    $this->totalPages,
+                                                    $startPage + 4
+                                            );
+
+                                    if (
+                                            $endPage - $startPage < 4
+                                    ) {
+                                        $startPage =
+                                                max(
+                                                        1,
+                                                        $endPage - 4
+                                                );
+                                    }
+                                    ?>
+
+                                    <div style="display: flex; gap: 4px;">
+
+                                        <?php
+                                        for (
+                                                $p = $startPage;
+                                                $p <= $endPage;
+                                                $p++
+                                        ):
+                                            ?>
+
+                                            <form
+                                                    method="POST"
+                                                    style="display: inline;"
+                                            >
+
+                                                <input
+                                                        type="hidden"
+                                                        name="provider"
+                                                        value="<?= htmlspecialchars($this->provider) ?>"
+                                                >
+
+                                                <input
+                                                        type="hidden"
+                                                        name="city"
+                                                        value="<?= htmlspecialchars($this->selectedCity) ?>"
+                                                >
+
+                                                <input
+                                                        type="hidden"
+                                                        name="place"
+                                                        value="<?= htmlspecialchars($this->selectedCategory) ?>"
+                                                >
+
+                                                <input
+                                                        type="hidden"
+                                                        name="page"
+                                                        value="<?= $p ?>"
+                                                >
+
+                                                <button
+                                                        type="submit"
+                                                        class="btn-link <?= $p === $this->currentPage
+                                                                ? 'btn-link-primary'
+                                                                : 'btn-link-secondary'
+                                                        ?>"
+                                                        style="
+                                                                padding: 6px 12px;
+                                                                min-width: 40px;
+                                                        <?= $p === $this->currentPage
+                                                                ? 'font-weight: 700;'
+                                                                : ''
+                                                        ?>
+                                                                "
+                                                >
+                                                    <?= $p ?>
+                                                </button>
+
+                                            </form>
+
+                                        <?php endfor; ?>
+
+                                    </div>
+
+                                </div>
+
+
+                                <form method="POST" style="display: inline;">
+
+                                    <input
+                                            type="hidden"
+                                            name="provider"
+                                            value="<?= htmlspecialchars($this->provider) ?>"
+                                    >
+
+                                    <input
+                                            type="hidden"
+                                            name="city"
+                                            value="<?= htmlspecialchars($this->selectedCity) ?>"
+                                    >
+
+                                    <input
+                                            type="hidden"
+                                            name="place"
+                                            value="<?= htmlspecialchars($this->selectedCategory) ?>"
+                                    >
+
+                                    <input
+                                            type="hidden"
+                                            name="page"
+                                            value="<?= min(
+                                                    $this->totalPages,
+                                                    $this->currentPage + 1
+                                            ) ?>"
+                                    >
+
+                                    <button
+                                            type="submit"
+                                            class="btn-link btn-link-primary"
+                                            <?= $this->currentPage >= $this->totalPages
+                                                    ? 'disabled'
+                                                    : ''
+                                            ?>
+                                            style="
+                                            <?= $this->currentPage >= $this->totalPages
+                                                    ? 'opacity: 0.5; cursor: not-allowed;'
+                                                    : ''
+                                            ?>
+                                                    "
+                                    >
+                                        صفحه بعدی →
+                                    </button>
+
+                                </form>
+
+                            </div>
+
+                        <?php endif; ?>
+<!--                        --><?php //if ($this->totalPages > 1): ?>
+<!--                            <div class="pagination" style="display: flex; justify-content: center; align-items: center; gap: 8px; margin-top: 24px; padding: 16px 0; flex-wrap: wrap;">-->
+<!--                                <form method="POST" style="display: inline;">-->
+<!--                                    <input type="hidden" name="provider" value="--><?php //= htmlspecialchars($this->provider) ?><!--">-->
+<!--                                    <input type="hidden" name="city" value="--><?php //= htmlspecialchars($this->selectedCity) ?><!--">-->
+<!--                                    <input type="hidden" name="place" value="--><?php //= htmlspecialchars($this->selectedCategory) ?><!--">-->
+<!--                                    <input type="hidden" name="page" value="--><?php //= max(1, $this->currentPage - 1) ?><!--">-->
+<!--                                    <button type="submit" -->
+<!--                                        class="btn-link btn-link-primary" -->
+<!--                                        --><?php //= $this->currentPage <= 1 ? 'disabled' : '' ?>
+<!--                                        style="--><?php //= $this->currentPage <= 1 ? 'opacity: 0.5; cursor: not-allowed;' : '' ?><!--">-->
+<!--                                        ← صفحه قبلی-->
+<!--                                    </button>-->
+<!--                                </form>-->
+<!---->
+<!--                                <div class="pagination-info" style="display: flex; align-items: center; gap: 12px; font-size: 14px; color: #555;">-->
+<!--                                    <span>صفحه --><?php //= $this->currentPage ?><!-- از --><?php //= $this->totalPages ?><!--</span>-->
+<!--                                    --><?php //if ($this->totalResults > 0): ?>
+<!--                                        <span style="color: #888;">(مجموع --><?php //= $this->totalResults ?><!-- نتیجه)</span>-->
+<!--                                    --><?php //endif; ?>
+<!--                                    -->
+<!--                                    --><?php
+//                                    // Show page numbers (max 5 pages centered on current)
+//                                    $startPage = max(1, $this->currentPage - 2);
+//                                    $endPage = min($this->totalPages, $startPage + 4);
+//                                    if ($endPage - $startPage < 4) {
+//                                        $startPage = max(1, $endPage - 4);
+//                                    }
+//                                    ?>
+<!--                                    <div style="display: flex; gap: 4px;">-->
+<!--                                        --><?php //for ($p = $startPage; $p <= $endPage; $p++): ?>
+<!--                                            <form method="POST" style="display: inline;">-->
+<!--                                                <input type="hidden" name="provider" value="--><?php //= htmlspecialchars($this->provider) ?><!--">-->
+<!--                                                <input type="hidden" name="city" value="--><?php //= htmlspecialchars($this->selectedCity) ?><!--">-->
+<!--                                                <input type="hidden" name="place" value="--><?php //= htmlspecialchars($this->selectedCategory) ?><!--">-->
+<!--                                                <input type="hidden" name="page" value="--><?php //= $p ?><!--">-->
+<!--                                                <button type="submit" -->
+<!--                                                    class="btn-link --><?php //= $p === $this->currentPage ? 'btn-link-primary' : 'btn-link-secondary' ?><!--" -->
+<!--                                                    style="padding: 6px 12px; min-width: 40px; --><?php //= $p === $this->currentPage ? 'font-weight: 700;' : '' ?><!--">-->
+<!--                                                    --><?php //= $p ?>
+<!--                                                </button>-->
+<!--                                            </form>-->
+<!--                                        --><?php //endfor; ?>
+<!--                                    </div>-->
+<!--                                </div>-->
+<!---->
+<!--                                <form method="POST" style="display: inline;">-->
+<!--                                    <input type="hidden" name="provider" value="--><?php //= htmlspecialchars($this->provider) ?><!--">-->
+<!--                                    <input type="hidden" name="city" value="--><?php //= htmlspecialchars($this->selectedCity) ?><!--">-->
+<!--                                    <input type="hidden" name="place" value="--><?php //= htmlspecialchars($this->selectedCategory) ?><!--">-->
+<!--                                    <input type="hidden" name="page" value="--><?php //= min($this->totalPages, $this->currentPage + 1) ?><!--">-->
+<!--                                    <button type="submit" -->
+<!--                                        class="btn-link btn-link-primary" -->
+<!--                                        --><?php //= $this->currentPage >= $this->totalPages ? 'disabled' : '' ?>
+<!--                                        style="--><?php //= $this->currentPage >= $this->totalPages ? 'opacity: 0.5; cursor: not-allowed;' : '' ?><!--">-->
+<!--                                        صفحه بعدی →-->
+<!--                                    </button>-->
+<!--                                </form>-->
+<!--                            </div>-->
+<!--                        --><?php //endif; ?>
                     <?php endif; ?>
                 <?php endif; ?>
             </div>
@@ -776,8 +1260,26 @@ final class SearchView
                     // Handle provider change - reload page with new provider
                     if (providerSelect) {
                         providerSelect.addEventListener('change', function() {
+                            // Reset page to 1 when provider changes
+                            document.getElementById('pageInput').value = '1';
                             // Submit the form to reload with new provider
                             form.submit();
+                        });
+                    }
+
+                    // Reset page to 1 when city changes
+                    const citySelectMain = document.querySelector('select[name="city"]');
+                    if (citySelectMain) {
+                        citySelectMain.addEventListener('change', function() {
+                            document.getElementById('pageInput').value = '1';
+                        });
+                    }
+
+                    // Reset page to 1 when category changes
+                    const placeSelect = document.querySelector('select[name="place"]');
+                    if (placeSelect) {
+                        placeSelect.addEventListener('change', function() {
+                            document.getElementById('pageInput').value = '1';
                         });
                     }
 

@@ -26,6 +26,7 @@ final class NeshanController
     private ?array $results = null;
     private ?string $error = null;
     private array $existingCallLogs = [];
+    private int $currentPage = 1;
 
     public function run(): void
     {
@@ -67,6 +68,7 @@ final class NeshanController
     {
         $this->selectedCity = $_POST['city'] ?? '';
         $this->selectedCategory = trim(strtolower($_POST['place'] ?? 'guest-house'));
+        $this->currentPage = max(1, (int)($_POST['page'] ?? 1));
         $this->results = null;
         $this->error = null;
         $this->existingCallLogs = [];
@@ -101,9 +103,10 @@ final class NeshanController
                 }
 
                 try {
-                    $result = $this->service->search($citySlug, $this->selectedCategory, 1);
+                    // Use pagination (memory efficient) - only fetch current page
+                    $result = $this->service->search($citySlug, $this->selectedCategory, $this->currentPage);
                     $this->results = $result['success'] ? $result : null;
-                    $this->error = $result['success'] ? null : 'Category not found in this city';
+                    $this->error = $result['success'] ? null : ($result['error'] ?? 'خطای ناشناخته');
 
                     // Fetch existing call logs for these results
                     if ($this->results && !empty($this->results['places'])) {
@@ -188,7 +191,11 @@ final class NeshanController
             'neshan',
             '', // selectedProvince
             [], // provinceCities
-            []  // allProvinceCities
+            [],  // allProvinceCities
+            '', // selectedQuery
+            $this->currentPage,
+            $this->results['page_count'] ?? 1,
+            $this->results['total_results'] ?? 0
         );
         // Pass existing call logs to view
         $view->setExistingCallLogs($this->existingCallLogs);

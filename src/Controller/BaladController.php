@@ -69,10 +69,13 @@ final class BaladController
         $this->categories = require $root . '/config/categories.php';
     }
 
+    private int $currentPage = 1;
+
     private function handleRequest(): void
     {
         $this->selectedCity = $_POST['city'] ?? '';
         $this->selectedCategory = $_POST['place'] ?? 'guest-house';
+        $this->currentPage = max(1, (int)($_POST['page'] ?? 1));
         $this->results = null;
         $this->error = null;
 
@@ -106,7 +109,7 @@ final class BaladController
                 }
 
                 try {
-                    $result = $this->service->search($citySlug, $this->selectedCategory, 1);
+                    $result = $this->service->search($citySlug, $this->selectedCategory, $this->currentPage);
                     $this->results = $result['success'] ? $result : null;
                     $this->error = $result['success'] ? null : ($result['error'] ?? 'خطای ناشناخته');
 
@@ -193,7 +196,10 @@ final class BaladController
             'balad',
             '', // selectedProvince
             [], // provinceCities
-            []  // allProvinceCities
+            [],  // allProvinceCities
+            '', // selectedQuery
+            $this->currentPage,
+            $this->results['page_count'] ?? 1
         );
         // Pass existing call logs to view
         $view->setExistingCallLogs($this->existingCallLogs ?? []);
