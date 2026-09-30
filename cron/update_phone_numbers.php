@@ -58,6 +58,7 @@ $options = getopt('qh', [
     'reset-failed',
     'cookies:',
     'cookie-file:',
+    'login',
     'dry-run',
     'stats',
     'quiet',
@@ -93,7 +94,13 @@ if (!is_dir($logsDir)) {
     @mkdir($logsDir, 0755, true);
 }
 
-// 1. Handle Cookie Import if passed via arguments
+// 1. Handle Interactive OTP Login
+if (isset($options['login'])) {
+    runInteractiveLogin();
+    exit(0);
+}
+
+// 2. Handle Cookie Import if passed via arguments
 if (!empty($options['cookies'])) {
     $cookieStr = trim((string) $options['cookies']);
     $parsed = DivarCookieManager::parseCookieString($cookieStr);
@@ -275,6 +282,7 @@ Divar Phone Numbers Updater - Cron Job / CLI Worker
   php cron/update_phone_numbers.php [گزینه‌ها]
 
 گزینه‌ها:
+  --login            ورود تعاملی به حساب دیوار از طریق دریافت پیامک کد تأیید (OTP)
   --limit=N          حداکثر تعداد آگهی برای بررسی در این اجرا (پیش‌فرض: 20)
   --delay=N          تاخیر پایه بین درخواست‌ها به میلی‌ثانیه (پیش‌فرض: 3000)
   --city=NAME        فیلتر بر اساس نام یا اسلاگ شهر
@@ -287,10 +295,192 @@ Divar Phone Numbers Updater - Cron Job / CLI Worker
   --quiet, -q        اجرای بی‌صدا (مناسب کرون‌تاب)
   --help, -h         نمایش این راهنما
 
-نمونه تنظیم در crontab (اجرا هر ۱۵ دقیقه):
+نمونه ورود و تنظیم کرون‌تاب:
+  # گام ۱: لاگین و دریافت کوکی
+  php cron/update_phone_numbers.php --login
+
+  # گام ۲: اجرا در crontab (هر ۱۵ دقیقه):
   */15 * * * * cd /path/to/search_place && php cron/update_phone_numbers.php -q >> storage/logs/cron.log 2>&1
 
 HELP;
+}
+
+/**
+ * Interactive Divar OTP Login.
+ */
+function runInteractiveLogin(): void
+{
+    echo "\n=======================================================\n";
+    echo " 📱 ورود به دیوار از طریق پیامک (Divar OTP Login)\n";
+    echo "=======================================================\n";
+    echo "لطفا شماره موبایل ثبت شده در دیوار را وارد کنید (مثال: 09123456789): ";
+    $phone = trim((string) fgets(STDIN));
+
+    if (!preg_match('/^09\d{9}$/', $phone)) {
+        fwrite(STDERR, "✖ شماره موبایل نامعتبر است. باید ۱۱ رقم بوده و با 09 شروع شود.\n\n");
+        exit(1);
+    }
+
+    echo "در حال ارسال کد تأیید به {$phone}...\n";
+
+    // Step 1: Request OTP
+    $userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+    $payload = [
+        'specification' => [
+            'page' => 1,
+            'data' => [
+                'data' => [
+                    'phone' => ['str' => ['value' => $phone]],
+                    'send_code_method' => ['str' => ['value' => 'SMS']],
+                ],
+                'online_request_response_data' => new \stdClass(),
+            ],
+            'is_reload' => false,
+        ],
+    ];
+
+    $ch = curl_init('https://api.divar.ir/v8/auth/open-initiate-page');
+    curl_setopt_array($ch, [
+        CURLOPT_CUSTOMREQUEST => 'POST',
+        CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE),
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HTTPHEADER => [
+            'accept: application/json-divar-filled',
+            'content-type: application/json',
+            'origin: https://divar.ir',
+            'referer: https://divar.ir/',
+            'user-agent: ' . $userAgent,
+            'x-standard-divar-error: true',
+            'x-web-serving-mode: desktop',
+        ],
+        CURLOPT_TIMEOUT => 30,
+        CURLOPT_SSL_VERIFYPEER => true,
+    ]);
+
+    $response = curl_exec($ch);
+    $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlError = curl_error($ch);
+    curl_close($ch);
+
+    if ($response === false || $curlError !== '') {
+        fwrite(STDERR, "✖ خطا در ارتباط با دیوار: {$curlError}\n\n");
+        exit(1);
+    }
+
+    $result = json_decode($response, true);
+    if (!is_array($result) || $httpCode < 200 || $httpCode >= 300) {
+        fwrite(STDERR, "✖ ارسال کد تأیید ناموفق بود (HTTP {$httpCode}).\n\n");
+        exit(1);
+    }
+
+    $preAuthSessionId = null;
+    $deviceId = null;
+    $widgets = $result['page']['widget_list'] ?? [];
+    foreach ($widgets as $widget) {
+        if (($widget['widget_type'] ?? '') !== 'I_HIDDEN_ROW') {
+            continue;
+        }
+        $field = $widget['data']['string_field'] ?? null;
+        if (!$field) {
+            continue;
+        }
+        if (($field['key'] ?? '') === 'pre_auth_session_id') {
+            $preAuthSessionId = $field['default'] ?? null;
+        }
+        if (($field['key'] ?? '') === 'device_id') {
+            $deviceId = $field['default'] ?? null;
+        }
+    }
+
+    if (!$preAuthSessionId || !$deviceId) {
+        fwrite(STDERR, "✖ پاسخ دیوار قابل پردازش نبود.\n\n");
+        exit(1);
+    }
+
+    echo "✔ کد تأیید با موفقیت به شماره {$phone} پیامک شد.\n";
+    echo "لطفا کد تأیید دریافتی را وارد کنید: ";
+    $code = trim((string) fgets(STDIN));
+
+    if (!preg_match('/^\d{4,8}$/', $code)) {
+        fwrite(STDERR, "✖ فرمت کد تأیید نامعتبر است.\n\n");
+        exit(1);
+    }
+
+    echo "در حال اعتبارسنجی کد با دیوار...\n";
+
+    $verifyPayload = [
+        'preAuthSessionId' => $preAuthSessionId,
+        'deviceId' => $deviceId,
+        'userInputCode' => $code,
+    ];
+
+    $ch = curl_init('https://api.divar.ir/v8/authenticate/signinup/code/consume');
+    curl_setopt_array($ch, [
+        CURLOPT_CUSTOMREQUEST => 'POST',
+        CURLOPT_POSTFIELDS => json_encode($verifyPayload, JSON_UNESCAPED_UNICODE),
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HEADER => true,
+        CURLOPT_HTTPHEADER => [
+            'accept: application/json, text/plain, */*',
+            'content-type: application/json',
+            'origin: https://divar.ir',
+            'referer: https://divar.ir/',
+            'rid: passwordless',
+            'st-auth-mode: cookie',
+            'user-agent: ' . $userAgent,
+            'x-standard-divar-error: true',
+            'x-web-serving-mode: desktop',
+        ],
+        CURLOPT_TIMEOUT => 30,
+        CURLOPT_SSL_VERIFYPEER => true,
+    ]);
+
+    $raw = curl_exec($ch);
+    $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $headerSize = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
+    $curlError = curl_error($ch);
+    curl_close($ch);
+
+    if ($raw === false || $curlError !== '') {
+        fwrite(STDERR, "✖ خطا در بررسی کد با دیوار: {$curlError}\n\n");
+        exit(1);
+    }
+
+    $rawHeaders = substr($raw, 0, $headerSize);
+
+    if ($httpCode < 200 || $httpCode >= 300) {
+        fwrite(STDERR, "✖ کد وارد شده نادرست یا منقضی است (HTTP {$httpCode}).\n\n");
+        exit(1);
+    }
+
+    $cookies = [];
+    foreach (explode("\r\n", $rawHeaders) as $line) {
+        if (stripos($line, 'Set-Cookie:') !== 0) {
+            continue;
+        }
+        $cookiePart = trim(substr($line, strlen('Set-Cookie:')));
+        $nameValue = explode(';', $cookiePart, 2)[0];
+        $eq = strpos($nameValue, '=');
+        if ($eq === false) {
+            continue;
+        }
+        $name = trim(substr($nameValue, 0, $eq));
+        $value = trim(substr($nameValue, $eq + 1));
+        if ($name !== '') {
+            $cookies[$name] = $value;
+        }
+    }
+
+    if (empty($cookies)) {
+        fwrite(STDERR, "✖ کوکی نشست از دیوار دریافت نشد.\n\n");
+        exit(1);
+    }
+
+    DivarCookieManager::setCookies($cookies);
+    echo "🎉 ورود با موفقیت انجام شد!\n";
+    echo "✔ کوکی‌های احراز هویت در مسیر storage/divar_cookies.json ذخیره شدند.\n";
+    echo "اکنون می‌توانید کرون‌جاب را اجرا نمایید:\n";
+    echo "  php cron/update_phone_numbers.php\n\n";
 }
 
 /**
