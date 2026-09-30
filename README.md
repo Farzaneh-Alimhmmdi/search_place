@@ -54,6 +54,31 @@ The project follows a clean architecture pattern with separate components for:
 3. Service uses client to make API calls
 4. Results are passed back to controller and rendered by view
 
+## Neshan search and pagination
+
+Neshan's public map results are an infinite-scrolling list, not a numbered API.
+The Neshan provider now reads actual place links/cards, filters cards whose
+reported type clearly conflicts with the selected category, and scrolls the
+list to produce 20-result pages. The **بارگذاری نتایج بیشتر** button appends the
+next page without removing earlier cards. Neshan does not expose a reliable
+result total, so the UI only shows the count currently loaded instead of
+inventing a total.
+
+The first page preloads one page ahead and the server briefly caches results
+for subsequent requests. The cache is temporary (10 minutes) and lives outside
+the repository. If Neshan returns HTTP 429, the search page reports that the
+provider is rate-limiting requests and asks the user to retry later.
+
+Install the Python dependency and Playwright's managed browser on the server:
+
+```bash
+pip install -r src/Neshan/requirments
+python -m playwright install chromium
+```
+
+Set `CHROME_PATH` only when a particular installed Chrome/Chromium binary is
+required. See `src/Neshan/NESHAN_FIX_SUMMARY.md` for details.
+
 ## Divar Collection Page (`/divar_collect`)
 A second Divar page whose only job is to **fetch everything and store it in the
 database**.

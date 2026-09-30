@@ -1,45 +1,42 @@
-"""
-Neshan Search App - Searches categories defined in config/categories.php
-Uses Playwright with system Chromium to simulate a real user and extract results from DOM.
-Outputs clean JSON to stdout for PHP integration.
+#!/usr/bin/env python3
+"""Search Neshan Maps and return relevant place cards as JSON for PHP.
 
-Fixed: Default to headless mode for server execution
+Neshan's public map UI uses an infinite-scrolling result list rather than
+numbered pages. This script reads actual place links from that list, scrolls it
+until the requested slice (plus a look-ahead item) is available, and caches the
+loaded results briefly so moving to the next page does not open another browser.
 """
 
+from __future__ import annotations
+
+import argparse
+import hashlib
 import json
+import os
 import re
 import sys
-import argparse
+import tempfile
 import time
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import List, Dict, Any, Optional
-from dataclasses import dataclass, asdict
-from urllib.parse import quote_plus
+from typing import Any, Optional
+from urllib.parse import quote, urljoin, urlparse
 
-# Fix encoding for Windows
-if sys.platform == 'win32':
+if sys.platform == "win32":
     import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
-
-# Playwright import
-try:
-    from playwright.sync_api import sync_playwright
-except ImportError:
-    print(json.dumps({"error": "Playwright not installed. Run: pip install playwright && playwright install chromium"}))
-    sys.exit(1)
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 
-@dataclass
+@dataclass(frozen=True)
 class Category:
-    """Represents a category from categories.php"""
     value: str
     label: str
 
 
 @dataclass
 class PlaceResult:
-    """Represents a search result from Neshan"""
+    place_id: str
     name: str
     address: Optional[str] = None
     phone: Optional[str] = None
@@ -53,405 +50,743 @@ class PlaceResult:
 
 
 class NeshanCategories:
-    """Loads and manages categories from the PHP config file"""
-    
-    # The categories.php is at the project root config/ folder (3 levels up from this file)
-    CATEGORIES_PHP_PATH = Path(__file__).parent.parent.parent / "config" / "categories.php"
-    
+    """Load the categories offered by the PHP search form."""
+
+    CATEGORIES_PHP_PATH = Path(__file__).resolve().parents[2] / "config" / "categories.php"
     DEFAULT_CATEGORIES = [
-        Category('hotel', 'هتل'),
-        Category('motel', 'متل'),
-        Category('guest-house', 'مهمانسرا'),
-        Category('hostel', 'هاستل'),
-        Category('vernacular-accommodation', 'بوم‌گردی'),
-        Category('apartment', 'آپارتمان'),
-        Category('villa', 'ویلا'),
+        Category("hotel", "هتل"),
+        Category("motel", "متل"),
+        Category("guest-house", "مهمانسرا"),
+        Category("hostel", "هاستل"),
+        Category("vernacular-accommodation", "بوم‌گردی"),
+        Category("apartment", "آپارتمان"),
+        Category("villa", "ویلا"),
     ]
-    
+
     @classmethod
-    def load_categories(cls) -> List[Category]:
-        """Load categories from the PHP config file"""
+    def load_categories(cls) -> list[Category]:
         try:
-            content = cls.CATEGORIES_PHP_PATH.read_text(encoding='utf-8')
+            content = cls.CATEGORIES_PHP_PATH.read_text(encoding="utf-8")
             pattern = r"'value'\s*=>\s*'([^']+)',\s*'label'\s*=>\s*'([^']+)'"
             matches = re.findall(pattern, content)
             if matches:
                 return [Category(value, label) for value, label in matches]
-        except Exception as e:
-            print(f"Warning: Could not parse categories.php: {e}", file=sys.stderr)
-        
+        except (OSError, UnicodeError):
+            pass
         return cls.DEFAULT_CATEGORIES
 
 
-class NeshanSearcher:
-    """
-    Searches Neshan using Playwright with system Chromium.
-    Extracts results from the DOM after searching.
-    """
-    
-    BASE_URL = "https://neshan.org"
-    SEARCH_URL = "https://neshan.org/maps/search"
-    
-    def __init__(self, headless: bool = True, slow_mo: int = 100):
-        self.headless = headless
-        self.slow_mo = slow_mo
-        self.chrome_path = r'C:\Program Files\Google\Chrome\Application\chrome.exe'
-    
-    def search_category(self, category: Category, city: str = "تهران", max_results: int = 20, page: int = 1) -> dict:
-        """Search for a specific category in a city on Neshan
-        Returns dict with 'results' (List[PlaceResult]), 'has_more' (bool), 'page' (int)"""
-        results = []
-        
-        with sync_playwright() as p:
-            # Use different args for headless vs headed
-            if self.headless:
-                browser_args = [
-                    '--disable-blink-features=AutomationControlled',
-                    '--disable-dev-shm-usage',
-                    '--no-sandbox',
-                    '--disable-gpu',
-                    '--window-size=1920,1080',
-                ]
-            else:
-                browser_args = [
-                    '--disable-blink-features=AutomationControlled',
-                ]
-            
-            browser = p.chromium.launch(
-                headless=self.headless,
-                executable_path=self.chrome_path,
-                args=browser_args,
-                slow_mo=self.slow_mo
-            )
-            
-            try:
-                page_obj = browser.new_page(
-                    user_agent=(
-                        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                        'AppleWebKit/537.36 (KHTML, like Gecko) '
-                        'Chrome/120.0.0.0 Safari/537.36'
-                    ),
-                    viewport={'width': 1920, 'height': 1080},
-                    locale='fa-IR',
-                    timezone_id='Asia/Tehran',
-                )
-                
-                # Add stealth scripts
-                page_obj.add_init_script("""
-                    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-                    window.chrome = { runtime: {} };
-                """)
-                
-                # Go to search page
-                page_obj.goto(self.SEARCH_URL, wait_until='networkidle', timeout=60000)
-                # Wait longer in headless mode for page to fully render
-                wait_time = 8000 if self.headless else 3000
-                page_obj.wait_for_timeout(wait_time)
-                
-                # Try to close cookie consent popup if present
-                try:
-                    cookie_selectors = [
-                        'button:has-text("بستن")',
-                        'button:has-text("خیر")',
-                        'button:has-text("Reject")',
-                        'button:has-text("Close")',
-                        '[class*="cookie"] button',
-                        '[class*="popup"] button',
-                        '.close-button',
-                        '[aria-label*="بستن"]',
-                    ]
-                    for selector in cookie_selectors:
-                        cookie_btn = page_obj.query_selector(selector)
-                        if cookie_btn:
-                            cookie_btn.click()
-                            page_obj.wait_for_timeout(1000)
-                            break
-                except:
-                    pass
-                
-                # Navigate directly to search URL
-                search_query = f"{category.label} {city}"
-                print(f"Searching: {search_query}", file=sys.stderr)
-                
-                # URL encode the search query
-                encoded_query = quote_plus(search_query)
-                search_url = f"{self.SEARCH_URL}/{encoded_query}"
-                
-                # Navigate directly to search URL
-                page_obj.goto(search_url, wait_until='networkidle', timeout=60000)
-                
-                # Wait for results to load
-                page_obj.wait_for_timeout(15000)
-                
-                # Scroll to load more pages if needed
-                if page > 1:
-                    print(f"Scrolling to load page {page}...", file=sys.stderr)
-                    for p_num in range(page - 1):
-                        # Scroll down to trigger loading more results
-                        page_obj.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                        page_obj.wait_for_timeout(3000)
-                        # Also try scrolling the map container
-                        page_obj.evaluate("""
-                            const mapContainer = document.querySelector('.mapboxgl-map') || 
-                                               document.querySelector('[class*="map"]') || 
-                                               document.body;
-                            mapContainer.scrollTop = mapContainer.scrollHeight;
-                        """)
-                        page_obj.wait_for_timeout(2000)
-                
-                # Extract results from DOM
-                results = self._extract_results_from_dom(page_obj, category, max_results)
-                
-            except Exception as e:
-                print(f"Error during search: {e}", file=sys.stderr)
-            finally:
-                browser.close()
-        
-        return {
-            'results': results,
-            'has_more': len(results) >= max_results,
-            'page': page,
-        }
+# The Neshan search box sometimes returns text matches which are not places of
+# the selected type. Match the card's own type/name and discard a card when its
+# displayed type clearly belongs to another category.
+CATEGORY_TERMS: dict[str, tuple[str, ...]] = {
+    "hotel": ("هتل",),
+    "motel": ("متل",),
+    "guest-house": (
+        "مهمانسرا", "مهمان سرا", "مهمانپذیر", "مهمان پذیر", "مسافرخانه", "خانه مسافر", "اقامتگاه",
+    ),
+    "hostel": ("هاستل", "خوابگاه", "پانسیون"),
+    "vernacular-accommodation": ("بوم گردی", "بومگردی"),
+    "apartment": ("هتل آپارتمان", "آپارتمان"),
+    "villa": ("ویلا", "خانه ویلایی"),
+    "suite": ("سوئیت",),
+    "cottage": ("کلبه",),
+}
 
-    def _extract_results_from_dom(self, page, category: Category, max_results: int) -> List[PlaceResult]:
-        """Extract place results from the rendered DOM"""
-        results = []
-        
-        try:
-            # Strategy: Find individual result cards by looking for elements that:
-            # 1. Have a rating pattern (X,Y رای)
-            # 2. Have address keywords
-            # 3. Are not huge containers with all results
-            
-            seen_names = set()
-            noise_words = {'حذف', 'باز باشد', 'بازباشد', 'مسیرها', 'وب‌سایت', 'تماس', 'ارسال', 'پشتیبانی', 'نظر', 'اشتراک', 'گزارش', 'مشترک', 'نقشه', 'مسیریاب', 'دانلود', 'برنامه', 'نسخه', 'وب', 'جستجوی', 'جستجو', 'امتیاز', 'رای', 'بازدید', 'محبوب', 'جدید', 'پیشنهاد', 'آگهی'}
-            
-            # First try: look for elements with rating pattern
-            # These are likely individual result cards
-            rating_elements = page.query_selector_all('*:has-text("رای")')
-            print(f"Found {len(rating_elements)} elements containing 'رای'", file=sys.stderr)
-            
-            # Also get elements with category label as fallback
-            category_elements = page.query_selector_all(f'*:has-text("{category.label}")')
-            print(f"Found {len(category_elements)} elements containing '{category.label}'", file=sys.stderr)
-            
-            # Combine and deduplicate elements
-            all_elements = []
-            seen_element_ids = set()
-            for el_list in [rating_elements, category_elements]:
-                for el in el_list:
-                    try:
-                        # Use element handle as identifier
-                        el_id = id(el)
-                        if el_id not in seen_element_ids:
-                            seen_element_ids.add(el_id)
-                            all_elements.append(el)
-                    except:
-                        pass
-            
-            print(f"Total unique elements to process: {len(all_elements)}", file=sys.stderr)
-            
-            for el in all_elements:
-                if len(results) >= max_results:
+# More specific types come before broader types (e.g. "hotel apartment" before
+# "hotel") so a hotel-apartment card is not misclassified as a hotel.
+PLACE_KIND_TERMS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("apartment", ("هتل آپارتمان", "آپارتمان")),
+    ("vernacular-accommodation", ("بوم گردی", "بومگردی")),
+    ("guest-house", ("مهمانسرا", "مهمان سرا", "مهمانپذیر", "مهمان پذیر", "مسافرخانه", "خانه مسافر", "اقامتگاه")),
+    ("hostel", ("هاستل", "خوابگاه", "پانسیون")),
+    ("motel", ("متل",)),
+    ("hotel", ("هتل",)),
+    ("villa", ("ویلا", "خانه ویلایی")),
+    ("suite", ("سوئیت",)),
+    ("cottage", ("کلبه",)),
+    ("medical", ("مجتمع پزشکی", "مرکز پزشکی", "درمانگاه", "بیمارستان", "کلینیک", "پزشکی", "دندانپزشکی", "داروخانه")),
+    ("restaurant", ("رستوران", "کافه", "کافی شاپ", "فست فود", "غذاخوری", "بوفه", "پیتزا")),
+    ("retail", ("فروشگاه", "مرکز خرید", "پاساژ", "سوپرمارکت", "مغازه", "بوتیک")),
+    ("bank", ("بانک", "خودپرداز", "موسسه مالی")),
+    ("education", ("دانشگاه", "مدرسه", "آموزشگاه")),
+    ("transport", ("فرودگاه", "ترمینال", "ایستگاه")),
+    ("religious", ("مسجد", "حسینیه", "امامزاده", "کلیسا")),
+    ("event", ("سمینار", "همایش", "کنفرانس", "جشنواره", "نمایشگاه", "تالار")),
+    ("service", ("نیازمندی", "آگهی", "شرکت خدماتی", "دفتر خدمات", "مرکز جامع")),
+)
+
+NOISE_LINES = {
+    "حذف", "باز باشد", "بازباشد", "مسیرها", "وب سایت", "تماس", "ارسال",
+    "پشتیبانی", "نظر", "اشتراک", "گزارش", "مشترک", "نقشه", "مسیریاب",
+    "دانلود", "برنامه", "نسخه", "جستجو", "جستجوی", "امتیاز", "رای",
+    "بازدید", "محبوب", "جدید", "پیشنهاد", "آگهی", "مسیر", "وب سایت",
+}
+
+ADDRESS_MARKERS = (
+    "خیابان", "میدان", "کوچه", "بلوار", "محله", "پلاک", "منطقه", "جاده",
+    "بزرگراه", "طبقه", "ساختمان", "مجتمع", "شهرک", "استان",
+)
+PHONE_PATTERN = re.compile(r"(?<!\d)(?:\+?98|0)\d{9,10}(?!\d)")
+
+PERSIAN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+PERSIAN_TEXT = str.maketrans({"ي": "ی", "ى": "ی", "ك": "ک", "ـ": "", "\u200c": " "})
+
+
+def normalize_text(value: Any) -> str:
+    """Normalize Persian/Arabic text and digits for comparisons."""
+    text = str(value or "").translate(PERSIAN_TEXT).translate(PERSIAN_DIGITS).lower()
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _has_any(text: str, terms: tuple[str, ...] | list[str]) -> bool:
+    normalized = normalize_text(text)
+    return any(normalize_text(term) in normalized for term in terms)
+
+
+def detect_place_kind(lines: list[str]) -> tuple[Optional[str], Optional[str]]:
+    """Return the first identifiable Neshan place type in the supplied lines."""
+    for line in lines:
+        normalized = normalize_text(line)
+        matches: list[tuple[int, int, str, str]] = []
+        for kind, terms in PLACE_KIND_TERMS:
+            for term in terms:
+                normalized_term = normalize_text(term)
+                position = normalized.find(normalized_term)
+                if position >= 0:
+                    # Prefer the earliest phrase in a title and the most
+                    # specific phrase when two category terms start together.
+                    matches.append((position, -len(normalized_term), kind, normalized_term))
+        if matches:
+            # "اقامتگاه" is intentionally a broad guest-house synonym. When
+            # the same line identifies a more specific style (e.g. بوم‌گردی),
+            # trust that specific type instead.
+            specific_matches = [
+                match for match in matches
+                if not (match[2] == "guest-house" and match[3] == normalize_text("اقامتگاه"))
+            ]
+            _, _, kind, _ = min(specific_matches or matches)
+            return kind, line.strip()
+    return None, None
+
+
+def is_relevant_record(name: str, card_lines: list[str], category: Category) -> bool:
+    """Reject clear search false-positives while retaining matching place cards."""
+    wanted_kind = category.value
+    wanted_terms = CATEGORY_TERMS.get(wanted_kind, (category.label,))
+    name_text = normalize_text(name)
+    all_text = normalize_text(" ".join([name, *card_lines]))
+
+    # The type shown by Neshan is more reliable than a broad full-text hit.
+    detected_kind, _ = detect_place_kind(card_lines[1:] + [name])
+    if detected_kind is not None:
+        return detected_kind == wanted_kind
+
+    # If the card does not show a type, require the requested category in its
+    # name/card text instead of accepting a neighboring search suggestion.
+    return _has_any(name_text, wanted_terms) or _has_any(all_text, wanted_terms)
+
+
+def _clean_lines(text: str) -> list[str]:
+    cleaned: list[str] = []
+    for raw_line in (text or "").splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip(" \t\r\n•|·")
+        if not line:
+            continue
+        if normalize_text(line) in NOISE_LINES:
+            continue
+        if line not in cleaned:
+            cleaned.append(line)
+    return cleaned
+
+
+def _extract_place_id(href: str) -> Optional[str]:
+    parsed = urlparse(urljoin("https://neshan.org", href or ""))
+    match = re.search(r"/maps/places/([^/?#]+)", parsed.path)
+    return match.group(1) if match else None
+
+
+def parse_place_record(record: dict[str, Any], category: Category) -> Optional[PlaceResult]:
+    """Turn one place link/card into a stable, filtered result."""
+    href = str(record.get("href") or "").strip()
+    place_id = _extract_place_id(href)
+    if not place_id:
+        return None
+
+    link_lines = _clean_lines(str(record.get("link_text") or ""))
+    card_lines = _clean_lines(str(record.get("card_text") or ""))
+    if not card_lines:
+        card_lines = link_lines
+    if not link_lines:
+        link_lines = card_lines
+
+    name = next(
+        (
+            line for line in link_lines + card_lines
+            if len(line) >= 3
+            and len(line) <= 140
+            and not line.lower().startswith(("http://", "https://"))
+            and normalize_text(line) not in NOISE_LINES
+        ),
+        None,
+    )
+    if not name or not is_relevant_record(name, card_lines, category):
+        return None
+
+    # Prefer the visible Neshan type line, if present, over echoing the search
+    # term as though it were the listing's actual category.
+    _, actual_category = detect_place_kind(card_lines[1:] + [name])
+    if actual_category is not None and normalize_text(actual_category) == normalize_text(name):
+        actual_category = None
+
+    address = next(
+        (
+            line for line in card_lines
+            if line != name
+            and line != actual_category
+            and any(marker in normalize_text(line) for marker in ADDRESS_MARKERS)
+        ),
+        None,
+    )
+
+    normalized_card = normalize_text(" ".join(card_lines))
+    phone_match = PHONE_PATTERN.search(normalized_card)
+    phone = phone_match.group(0) if phone_match else None
+
+    rating: Optional[float] = None
+    for index, line in enumerate(card_lines):
+        normalized_line = normalize_text(line)
+        # Neshan often renders the score and review count on adjacent lines:
+        # "5" followed by "2 رای". Never mistake the review count for a score.
+        if "رای" in normalized_line and index > 0:
+            score = normalize_text(card_lines[index - 1]).replace(",", ".")
+            if re.fullmatch(r"[0-5](?:\.[0-9]+)?", score):
+                candidate = float(score)
+                if 0 <= candidate <= 5:
+                    rating = candidate
                     break
-                    
+        score_match = re.search(r"(?:امتیاز\s*)?([0-5](?:[.,][0-9]+)?)\s*(?:از\s*5|★|⭐)", normalized_line)
+        if score_match:
+            candidate = float(score_match.group(1).replace(",", "."))
+            if 0 <= candidate <= 5:
+                rating = candidate
+                break
+
+    website: Optional[str] = None
+    instagram_id: Optional[str] = None
+    for link in record.get("external_links", []) or []:
+        url = str(link or "").strip()
+        lowered = url.lower()
+        if "instagram.com/" in lowered:
+            match = re.search(r"instagram\.com/([^/?#]+)", url, re.IGNORECASE)
+            if match:
+                instagram_id = match.group(1).lstrip("@")
+        elif lowered.startswith(("https://", "http://")) and not any(
+            host in lowered for host in ("neshan.org", "mapbox.com", "neshan.blog")
+        ):
+            website = url
+
+    if not instagram_id:
+        match = re.search(
+            r"(?:instagram|اینستاگرام|اینستا)[\s:@]*([a-zA-Z0-9_.]{1,30})",
+            " ".join(card_lines),
+            re.IGNORECASE,
+        )
+        if match:
+            instagram_id = match.group(1)
+
+    return PlaceResult(
+        place_id=place_id,
+        name=name,
+        address=address,
+        phone=phone,
+        website=website,
+        category=actual_category,
+        rating=rating,
+        instagram_id=instagram_id,
+        neshan_url=urljoin("https://neshan.org", href),
+    )
+
+
+def paginate_results(
+    results: list[dict[str, Any]], page: int, page_size: int, complete: bool
+) -> tuple[list[dict[str, Any]], bool, Optional[int]]:
+    """Return one page, has-more, and an exact total only when the list ended."""
+    start = (page - 1) * page_size
+    end = start + page_size
+    page_results = results[start:end]
+    has_more = len(results) > end or (not complete and len(page_results) == page_size)
+    total = len(results) if complete else None
+    return page_results, has_more, total
+
+
+class NeshanSearcher:
+    """Use the Neshan web search result list as the source of place cards."""
+
+    SEARCH_URL = "https://neshan.org/maps/search"
+    CACHE_VERSION = 2
+    DEFAULT_CACHE_TTL = 600
+    MAX_SCROLL_STEPS = 60
+    STABLE_SCROLLS_TO_FINISH = 3
+
+    def __init__(
+        self,
+        headless: bool = True,
+        slow_mo: int = 0,
+        cache_ttl: int = DEFAULT_CACHE_TTL,
+        max_scroll_steps: int = MAX_SCROLL_STEPS,
+    ) -> None:
+        self.headless = headless
+        self.slow_mo = max(0, slow_mo)
+        self.cache_ttl = max(0, cache_ttl)
+        self.max_scroll_steps = max(1, max_scroll_steps)
+
+    @staticmethod
+    def _cache_path(city: str, category: Category) -> Path:
+        cache_root = Path(tempfile.gettempdir()) / "search-place-neshan-cache"
+        key = hashlib.sha256(f"{city}\n{category.value}\n{category.label}".encode("utf-8")).hexdigest()
+        return cache_root / f"{key}.json"
+
+    def _read_cache(self, city: str, category: Category) -> Optional[dict[str, Any]]:
+        path = self._cache_path(city, category)
+        try:
+            cached = json.loads(path.read_text(encoding="utf-8"))
+            age = time.time() - float(cached.get("cached_at", 0))
+            if (
+                cached.get("version") != self.CACHE_VERSION
+                or age < 0
+                or age > self.cache_ttl
+                or not isinstance(cached.get("results"), list)
+            ):
+                return None
+            return cached
+        except (OSError, ValueError, TypeError):
+            return None
+
+    def _write_cache(
+        self,
+        city: str,
+        category: Category,
+        results: list[dict[str, Any]],
+        complete: bool,
+    ) -> None:
+        path = self._cache_path(city, category)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "version": self.CACHE_VERSION,
+                "cached_at": time.time(),
+                "complete": complete,
+                "results": results,
+            }
+            temporary_path = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+            temporary_path.write_text(
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            os.replace(temporary_path, path)
+        except OSError as error:
+            print(f"Could not write Neshan search cache: {error}", file=sys.stderr)
+
+    @staticmethod
+    def _merge_results(
+        old_results: list[dict[str, Any]], new_results: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        merged: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for result in old_results + new_results:
+            place_id = str(result.get("place_id") or "")
+            if not place_id or place_id in seen_ids:
+                continue
+            seen_ids.add(place_id)
+            merged.append(result)
+        return merged
+
+    def search_category(
+        self,
+        category: Category,
+        city: str = "تهران",
+        max_results: int = 20,
+        page: int = 1,
+    ) -> dict[str, Any]:
+        page = max(1, page)
+        page_size = max(1, max_results)
+        page_start = (page - 1) * page_size
+        page_end = page_start + page_size
+        cached = self._read_cache(city, category)
+        cached_results = list(cached.get("results", [])) if cached else []
+        cached_complete = bool(cached and cached.get("complete"))
+
+        # If this page plus a look-ahead place is already cached, avoid launching
+        # Chromium. A completed cache can also serve the final page exactly.
+        cache_is_enough = cached_complete or len(cached_results) >= page_end
+        if cache_is_enough:
+            return self._page_response(cached_results, page, page_size, cached_complete)
+
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            return {"error": "Playwright is not installed. Install it with: pip install playwright && python -m playwright install chromium"}
+
+        # Load the requested page and one further page in the same browser
+        # session. This gives the UI a quick next-page response without having
+        # to send another Neshan search request immediately.
+        target_count = page_end + page_size + 1
+        query = f"{category.label} در {city}".strip()
+        search_url = f"{self.SEARCH_URL}/{quote(query, safe='')}"
+        scraped_results: list[dict[str, Any]] = []
+        scrape_complete = False
+        page_error: Optional[str] = None
+
+        try:
+            with sync_playwright() as playwright:
+                launch_options: dict[str, Any] = {
+                    "headless": self.headless,
+                    "slow_mo": self.slow_mo,
+                    "args": [
+                        "--disable-blink-features=AutomationControlled",
+                        "--disable-dev-shm-usage",
+                        "--no-sandbox",
+                        "--disable-gpu",
+                    ],
+                }
+                # Use a system browser only when explicitly configured and found.
+                # Otherwise let Playwright use its bundled Chromium (works on Linux
+                # servers as well as developer machines).
+                chrome_path = os.environ.get("CHROME_PATH", "").strip()
+                if chrome_path and Path(chrome_path).is_file():
+                    launch_options["executable_path"] = chrome_path
+
+                browser = playwright.chromium.launch(**launch_options)
                 try:
-                    text = el.inner_text().strip()
-                    if not text or len(text) < 15:
-                        continue
-                    
-                    # Skip huge container elements (likely the full results list)
-                    if len(text) > 2000:
-                        if len(results) < 3:
-                            print(f"DEBUG Skipping huge element (len={len(text)})", file=sys.stderr)
-                        continue
-                    
-                    # Check if this looks like a result card
-                    lines = [line.strip() for line in text.split('\n') if line.strip()]
-                    
-                    # Accept elements with at least 1 line (the name)
-                    
-                    # print(f"DEBUG Processing element (len={len(text)}, lines={len(lines)}): first line='{lines[0]}'", file=sys.stderr)
-                    
-                    # First non-noise line should be the name
-                    name = None
-                    for line in lines:
-                        if line not in noise_words and len(line) > 2 and not line.startswith('http'):
-                            name = line
-                            break
-                    
-                    if not name:
-                        continue
-                    
-                    # Skip if we've seen this name
-                    if name in seen_names:
-                        continue
-                    
-                    # Skip if it's just the category label or noise
-                    if name == category.label or name in noise_words:
-                        continue
-                    
-                    # Skip very short or very long names
-                    if len(name) < 3 or len(name) > 100:
-                        continue
-                    
-                    # Skip if name contains noise words (use word boundary-aware check)
-                    name_words = name.split()
-                    skip = False
-                    for nw in noise_words:
-                        if nw in name_words:  # Exact word match
-                            skip = True
-                            break
-                        # Also check if noise word is a standalone word in the name
-                        # (surrounded by spaces or at start/end)
-                        if f' {nw} ' in f' {name} ' or name.startswith(nw + ' ') or name.endswith(' ' + nw):
-                            skip = True
-                            break
-                    if skip:
-                        continue
-                    
-                    # Accept any valid name (simplified for headless mode)
-                    # No minimum line requirement - just need a valid name
-                    
-                    # Try to extract rating
-                    rating = None
-                    for line in lines:
-                        # Match both "33 رای" and "33.5 رای" patterns
-                        rating_match = re.search(r'(\d+[.,]?\d*)\s*رای', line)
-                        if rating_match:
-                            try:
-                                rating = float(rating_match.group(1).replace(',', '.'))
-                            except:
-                                rating = None
-                            break
-                    
-                    # Try to find address (usually contains Persian street/city names)
-                    address = None
-                    address_keywords = ['خیابان', 'میدان', 'کوچه', 'بلوار', 'شهر', 'محله', 'پلاک', 'بخش', 'منطقه', 'جاده', 'معاون', 'مجتمع', 'ساختمان']
-                    for line in lines:
-                        if any(keyword in line for keyword in address_keywords):
-                            address = line
-                            break
-                    
-                    # Try to find phone
-                    phone = None
-                    for line in lines:
-                        if re.search(r'(\+?98|0)\d{10}', line):
-                            phone = line
-                            break
-                    
-                    # Try to find website
-                    website = None
-                    instagram_id = None
-                    links = el.query_selector_all('a')
-                    for link in links:
-                        href = link.get_attribute('href')
-                        if href and ('http' in href or 'www.' in href) and 'neshan.org' not in href and 'mapbox.com' not in href and 'neshan.blog' not in href:
-                            # Check if it's an Instagram link
-                            if 'instagram.com' in href:
-                                # Extract Instagram username from URL
-                                ig_match = re.search(r'instagram\.com/([^/?#]+)', href)
-                                if ig_match:
-                                    instagram_id = ig_match.group(1)
-                            else:
-                                website = href
-                    
-                    # Also check for Instagram in text content
-                    if not instagram_id:
-                        for line in lines:
-                            ig_match = re.search(r'(?:instagram|اینستاگرام|اینستا)[\s:@]*([a-zA-Z0-9_.]{1,30})', line, re.IGNORECASE)
-                            if ig_match:
-                                instagram_id = ig_match.group(1)
-                                break
-                    
-                    seen_names.add(name)
-                    
-                    results.append(PlaceResult(
-                        name=name,
-                        address=address,
-                        phone=phone,
-                        website=website,
-                        category=category.label,
-                        latitude=None,
-                        longitude=None,
-                        rating=rating,
-                        instagram_id=instagram_id,
-                        neshan_url=page.url,
-                    ))
-                    
-                except Exception as e:
-                    continue
-                    
-        except Exception as e:
-            print(f"Error extracting results: {e}", file=sys.stderr)
-        
-        print(f"Extracted {len(results)} unique results", file=sys.stderr)
-        return results
+                    browser_context = browser.new_context(
+                        user_agent=(
+                            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                        ),
+                        viewport={"width": 1440, "height": 1000},
+                        locale="fa-IR",
+                        timezone_id="Asia/Tehran",
+                    )
+                    page_object = browser_context.new_page()
+                    page_object.add_init_script(
+                        """
+                        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                        window.chrome = window.chrome || { runtime: {} };
+                        """
+                    )
 
+                    response = page_object.goto(
+                        search_url,
+                        wait_until="domcontentloaded",
+                        timeout=45000,
+                    )
+                    if response is not None and response.status == 429:
+                        page_error = "Neshan returned HTTP 429 (Too Many Requests). Please wait a few minutes and try again."
+                    elif response is not None and response.status >= 500:
+                        page_error = f"Neshan is temporarily unavailable (HTTP {response.status}). Please try again later."
+                    else:
+                        self._dismiss_cookie_dialog(page_object)
+                        try:
+                            page_object.wait_for_function(
+                                "document.querySelectorAll('a[href*=\"/maps/places/\"]').length > 0",
+                                timeout=20000,
+                            )
+                        except Exception:
+                            # A valid zero-result search has no place links. Give
+                            # the app a moment to render its empty-state text first.
+                            page_object.wait_for_timeout(1200)
 
-def main():
-    parser = argparse.ArgumentParser(description="Search Neshan for places by category")
-    parser.add_argument('--city', default='تهران', help='City to search in (Persian name)')
-    parser.add_argument('--category', help='Specific category to search (value from categories.php)')
-    parser.add_argument('--max-results', type=int, default=20, help='Max results per category')
-    parser.add_argument('--page', type=int, default=1, help='Page number to fetch (each page loads more results by scrolling)')
-    parser.add_argument('--output', help='Output JSON file path (use - for stdout)')
-    parser.add_argument('--headless', action='store_true', help='Run headless (default: True for server)')
-    parser.add_argument('--no-headless', action='store_false', dest='headless', help='Run with visible browser (default)')
-    parser.set_defaults(headless=True)
-    parser.add_argument('--slow-mo', type=int, default=100, help='Slow motion delay (ms)')
-    
-    args = parser.parse_args()
-    
-    categories = NeshanCategories.load_categories()
-    
-    if args.category:
-        categories = [c for c in categories if c.value == args.category]
-        if not categories:
-            print(f"Category '{args.category}' not found!", file=sys.stderr)
-            for c in NeshanCategories.load_categories():
-                print(f"  - {c.value}: {c.label}", file=sys.stderr)
-            sys.exit(1)
-    
-    print("=" * 60, file=sys.stderr)
-    print("Neshan Search - Playwright DOM Extraction", file=sys.stderr)
-    print("=" * 60, file=sys.stderr)
-    
-    searcher = NeshanSearcher(headless=args.headless, slow_mo=args.slow_mo)
-    
-    all_results = {}
-    pagination_info = {}
-    for category in categories:
-        print(f"\nSearching category: {category.label} ({category.value})", file=sys.stderr)
-        result_data = searcher.search_category(category, args.city, args.max_results, args.page)
-        results = result_data['results']
-        pagination_info[category.value] = {
-            'has_more': result_data['has_more'],
-            'page': result_data['page'],
+                        body_text = ""
+                        try:
+                            body_text = page_object.locator("body").inner_text(timeout=3000)
+                        except Exception:
+                            pass
+                        normalized_body = normalize_text(body_text)
+                        if "too many requests" in normalized_body or "429" in normalized_body:
+                            page_error = "Neshan is rate-limiting search requests (HTTP 429). Please wait a few minutes before retrying."
+                        elif not self._has_place_links(page_object) and not self._looks_like_empty_state(normalized_body):
+                            page_error = "Neshan loaded without any place results. The search may be temporarily blocked; please retry later."
+                        elif not self._has_place_links(page_object):
+                            # A rendered no-results message is a complete (empty)
+                            # search, not a reason to keep scrolling for a minute.
+                            scrape_complete = True
+                        else:
+                            all_records: dict[str, PlaceResult] = {}
+                            stable_scrolls = 0
+                            raw_ids: set[str] = set()
+
+                            for _ in range(self.max_scroll_steps + 1):
+                                records = self._extract_records(page_object)
+                                before_raw = len(raw_ids)
+                                for record in records:
+                                    place_id = _extract_place_id(str(record.get("href") or ""))
+                                    if place_id:
+                                        raw_ids.add(place_id)
+                                    place = parse_place_record(record, category)
+                                    if place:
+                                        all_records.setdefault(place.place_id, place)
+
+                                if len(all_records) >= target_count:
+                                    break
+
+                                scroll_info = self._scroll_result_list(page_object)
+                                page_object.wait_for_timeout(1200)
+                                if len(raw_ids) == before_raw:
+                                    stable_scrolls += 1
+                                else:
+                                    stable_scrolls = 0
+
+                                if (
+                                    stable_scrolls >= self.STABLE_SCROLLS_TO_FINISH
+                                    and scroll_info.get("at_bottom")
+                                ):
+                                    scrape_complete = True
+                                    break
+
+                            # Read once more after the final scroll/wait so the
+                            # last lazily-loaded batch is not missed.
+                            for record in self._extract_records(page_object):
+                                place = parse_place_record(record, category)
+                                if place:
+                                    all_records.setdefault(place.place_id, place)
+
+                            scraped_results = [asdict(place) for place in all_records.values()]
+                            if len(all_records) < target_count and stable_scrolls >= self.STABLE_SCROLLS_TO_FINISH:
+                                scrape_complete = True
+                            elif len(all_records) < target_count and self.max_scroll_steps <= 1:
+                                scrape_complete = False
+                            # Reaching the requested target is not proof that
+                            # Neshan has no more results.
+                finally:
+                    browser.close()
+        except Exception as error:
+            message = str(error).strip()
+            if "429" in message or "Too Many Requests" in message:
+                page_error = "Neshan is rate-limiting search requests (HTTP 429). Please wait a few minutes before retrying."
+            else:
+                page_error = f"Could not search Neshan: {message or error.__class__.__name__}"
+
+        if page_error:
+            # A cached page can still be served during a transient block, but do
+            # not pretend that an uncached/partial page is an empty search.
+            if cached_complete or len(cached_results) >= page_end:
+                return self._page_response(cached_results, page, page_size, cached_complete)
+            return {"error": page_error}
+
+        merged_results = self._merge_results(cached_results, scraped_results)
+        complete = cached_complete or scrape_complete
+        self._write_cache(city, category, merged_results, complete)
+        return self._page_response(merged_results, page, page_size, complete)
+
+    @staticmethod
+    def _page_response(
+        results: list[dict[str, Any]], page: int, page_size: int, complete: bool
+    ) -> dict[str, Any]:
+        page_results, has_more, total = paginate_results(results, page, page_size, complete)
+        page_count = max(1, (total + page_size - 1) // page_size) if total is not None else page + int(has_more)
+        return {
+            "results": page_results,
+            "has_more": has_more,
+            "page": page,
+            "page_size": page_size,
+            "total_results": total,
+            "loaded_results": len(results),
+            "complete": complete,
+            "page_count": page_count,
         }
-        all_results[category.value] = results
-        print(f"Found {len(results)} results", file=sys.stderr)
-        
-        # Small delay between categories
-        if len(categories) > 1:
-            time.sleep(3)
-    
-    # Convert to serializable format
-    output_data = {}
-    for cat_value, places in all_results.items():
-        output_data[cat_value] = [asdict(p) for p in places]
-    
-    # Include pagination info in output
-    output_data['_pagination'] = pagination_info
-    
-    # Output JSON (compact, single line for PHP parsing)
-    json_output = json.dumps(output_data, ensure_ascii=False, separators=(',', ':'))
-    
-    if args.output and args.output != '-':
-        Path(args.output).write_text(json_output, encoding='utf-8')
-        print(f"\nResults saved to: {args.output}", file=sys.stderr)
+
+    @staticmethod
+    def _dismiss_cookie_dialog(page_object: Any) -> None:
+        selectors = (
+            'button:has-text("بستن")',
+            'button:has-text("رد کردن")',
+            'button:has-text("Reject")',
+            'button:has-text("Close")',
+            '[aria-label*="بستن"]',
+        )
+        for selector in selectors:
+            try:
+                button = page_object.locator(selector).first
+                if button.count() and button.is_visible():
+                    button.click(timeout=700)
+                    page_object.wait_for_timeout(250)
+                    return
+            except Exception:
+                continue
+
+    @staticmethod
+    def _has_place_links(page_object: Any) -> bool:
+        try:
+            return page_object.locator('a[href*="/maps/places/"]').count() > 0
+        except Exception:
+            return False
+
+    @staticmethod
+    def _looks_like_empty_state(normalized_body: str) -> bool:
+        return bool(re.search(r"نتیجه.{0,12}(یافت|وجود|پیدا)", normalized_body))
+
+    @staticmethod
+    def _extract_records(page_object: Any) -> list[dict[str, Any]]:
+        """Extract visible place anchors and the smallest useful card ancestor."""
+        try:
+            records = page_object.evaluate(
+                """() => {
+                    const selector = 'a[href*="/maps/places/"]';
+                    const isVisible = (element) => {
+                        const rect = element.getBoundingClientRect();
+                        const style = window.getComputedStyle(element);
+                        return rect.width > 0 && rect.height > 0 &&
+                            style.visibility !== 'hidden' && style.display !== 'none';
+                    };
+                    const cleanText = (element) => (element.innerText || element.textContent || '').trim();
+                    return Array.from(document.querySelectorAll(selector))
+                        .filter(isVisible)
+                        .map((link) => {
+                            const linkText = cleanText(link);
+                            let card = link;
+                            let node = link;
+                            for (let depth = 0; depth < 9 && node && node !== document.body; depth++) {
+                                const text = cleanText(node);
+                                const placeLinkCount = node.querySelectorAll(selector).length;
+                                if (placeLinkCount > 1) break;
+                                if (text && text.length <= 1200 && text.length >= linkText.length) {
+                                    card = node;
+                                }
+                                const hasDetails = /رای|خیابان|میدان|کوچه|بلوار|تماس|وب.?سایت|\+?98|0\d{10}/.test(text);
+                                if (hasDetails && text.length <= 800 && placeLinkCount <= 1) {
+                                    card = node;
+                                    break;
+                                }
+                                node = node.parentElement;
+                            }
+                            const externalLinks = Array.from(card.querySelectorAll('a[href]'))
+                                .map((anchor) => anchor.href)
+                                .filter((href) => /^https?:/i.test(href) && !href.includes('/maps/places/'));
+                            return {
+                                href: link.href,
+                                link_text: linkText,
+                                card_text: cleanText(card),
+                                external_links: Array.from(new Set(externalLinks))
+                            };
+                        });
+                }"""
+            )
+            return records if isinstance(records, list) else []
+        except Exception as error:
+            print(f"Could not read Neshan result cards: {error}", file=sys.stderr)
+            return []
+
+    @staticmethod
+    def _scroll_result_list(page_object: Any) -> dict[str, Any]:
+        """Scroll the nearest result-list container to trigger Neshan's next batch."""
+        try:
+            info = page_object.evaluate(
+                """() => {
+                    const selector = 'a[href*="/maps/places/"]';
+                    const link = Array.from(document.querySelectorAll(selector)).find((element) => {
+                        const rect = element.getBoundingClientRect();
+                        return rect.width > 0 && rect.height > 0;
+                    });
+                    if (!link) {
+                        const before = window.scrollY;
+                        window.scrollBy(0, Math.max(window.innerHeight * 0.8, 500));
+                        return {moved: window.scrollY !== before, at_bottom: false};
+                    }
+                    let node = link.parentElement;
+                    let container = null;
+                    while (node && node !== document.body) {
+                        const style = window.getComputedStyle(node);
+                        const overflowY = style.overflowY;
+                        if ((overflowY === 'auto' || overflowY === 'scroll') &&
+                            node.scrollHeight > node.clientHeight + 8 && node.clientHeight > 160) {
+                            container = node;
+                            break;
+                        }
+                        node = node.parentElement;
+                    }
+                    if (container) {
+                        const before = container.scrollTop;
+                        const amount = Math.max(container.clientHeight * 0.85, 420);
+                        container.scrollTop = Math.min(before + amount, container.scrollHeight);
+                        const atBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 4;
+                        return {moved: container.scrollTop !== before, at_bottom: atBottom};
+                    }
+                    const before = window.scrollY;
+                    link.scrollIntoView({block: 'end', behavior: 'instant'});
+                    window.scrollBy(0, Math.max(window.innerHeight * 0.8, 500));
+                    return {
+                        moved: window.scrollY !== before,
+                        at_bottom: window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 4
+                    };
+                }"""
+            )
+            return info if isinstance(info, dict) else {"moved": False, "at_bottom": True}
+        except Exception:
+            return {"moved": False, "at_bottom": True}
+
+
+def _emit_error(message: str, exit_code: int = 2) -> None:
+    print(json.dumps({"error": message}, ensure_ascii=False, separators=(",", ":")))
+    raise SystemExit(exit_code)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Search Neshan for relevant places")
+    parser.add_argument("--city", default="تهران", help="City/province name in Persian")
+    parser.add_argument("--category", help="Category value from config/categories.php")
+    parser.add_argument("--max-results", type=int, default=20, help="Results returned per page")
+    parser.add_argument("--page", type=int, default=1, help="Result page number")
+    parser.add_argument("--output", help="Output JSON file path (use - for stdout)")
+    parser.add_argument("--headless", action="store_true", help="Run in headless mode (default)")
+    parser.add_argument("--no-headless", action="store_false", dest="headless", help="Run a visible browser")
+    parser.add_argument("--slow-mo", type=int, default=0, help="Optional Playwright delay in milliseconds")
+    parser.add_argument("--cache-ttl", type=int, default=600, help="Result cache lifetime in seconds")
+    parser.add_argument("--max-scroll-steps", type=int, default=60, help="Maximum infinite-list scrolls")
+    parser.set_defaults(headless=True)
+    args = parser.parse_args()
+
+    page = max(1, args.page)
+    page_size = max(1, min(args.max_results, 100))
+    categories = NeshanCategories.load_categories()
+    if args.category:
+        categories = [item for item in categories if item.value == args.category]
+        if not categories:
+            _emit_error(f"Category '{args.category}' was not found in config/categories.php")
+
+    searcher = NeshanSearcher(
+        headless=args.headless,
+        slow_mo=args.slow_mo,
+        cache_ttl=args.cache_ttl,
+        max_scroll_steps=args.max_scroll_steps,
+    )
+    output_data: dict[str, Any] = {}
+    pagination_info: dict[str, Any] = {}
+
+    for category in categories:
+        print(
+            f"Searching Neshan: {category.label} in {args.city}, page {page}",
+            file=sys.stderr,
+        )
+        result = searcher.search_category(category, args.city, page_size, page)
+        if result.get("error"):
+            _emit_error(str(result["error"]))
+        output_data[category.value] = result["results"]
+        pagination_info[category.value] = {
+            "page": result["page"],
+            "page_size": result["page_size"],
+            "has_more": result["has_more"],
+            "total_results": result["total_results"],
+            "loaded_results": result["loaded_results"],
+            "complete": result["complete"],
+            "page_count": result["page_count"],
+        }
+
+    output_data["_pagination"] = pagination_info
+    json_output = json.dumps(output_data, ensure_ascii=False, separators=(",", ":"))
+    if args.output and args.output != "-":
+        Path(args.output).write_text(json_output, encoding="utf-8")
     else:
-        # Only JSON to stdout
         print(json_output)
 
 

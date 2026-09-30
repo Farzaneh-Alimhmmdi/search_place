@@ -2,15 +2,8 @@
 
 namespace Src\Neshan;
 
-use Src\Exceptions\NeshanRequestException;
-
 /**
- * NeshanClient - Calls the Python Neshan search script to get results.
- * 
- * Since Neshan APIs are restricted, we use a Python script with Chromium-like
- * headers to simulate a real browser and scrape the search results.
- * 
- * Fixed: Default to headless mode for server execution
+ * Calls the Python/Playwright Neshan searcher and normalizes its JSON response.
  */
 final class NeshanClient
 {
@@ -25,189 +18,276 @@ final class NeshanClient
     ) {
         $this->pythonScriptPath = $pythonScriptPath;
         $this->pythonExecutable = $pythonExecutable;
-        $this->timeout = $timeout;
+        $this->timeout = max(1, $timeout);
     }
 
     /**
-     * Search for places using the Python script
-     * 
-     * @param string $citySlug URL-safe city identifier (e.g. 'tehran')
-     * @param string $category Category value from categories.php (e.g. 'hotel')
-     * @param int $page Page number
-     * @return array ['success' => true, 'places' => [...], ...] or ['success' => false, 'error' => '...']
+     * Search for a single page of places.
+     *
+     * @return array{success:bool, places:array, total:int, total_results:?int,
+     *               page:int, page_count:int, has_more:bool, error?:string}
      */
     public function search(string $citySlug, string $category, int $page = 1): array
     {
-        // Map city slug back to Persian name for the Python script
+        $page = max(1, $page);
         $cityName = $this->slugToCityName($citySlug);
-        
-        $cmd = sprintf(
-            '%s "%s" --city "%s" --category "%s" --max-results 20 --page %d --output - 2>&1',
-            escapeshellarg($this->pythonExecutable),
-            escapeshellarg($this->pythonScriptPath),
-            escapeshellarg($cityName),
-            escapeshellarg($category),
-            $page
-        );
-
-        $output = [];
-        $returnVar = 0;
-        
-        // Use proc_open for better control
-        $descriptorspec = [
-            0 => ['pipe', 'r'],  // stdin
-            1 => ['pipe', 'w'],  // stdout
-            2 => ['pipe', 'w'],  // stderr
+        $command = [
+            $this->pythonExecutable,
+            $this->pythonScriptPath,
+            '--city', $cityName,
+            '--category', $category,
+            '--max-results', '20',
+            '--page', (string)$page,
+            '--output', '-',
         ];
-        
-        $process = proc_open($cmd, $descriptorspec, $pipes);
-        
-        if (!is_resource($process)) {
-            return ['success' => false, 'error' => 'Failed to start Python process'];
+
+        $execution = $this->runPython($command);
+        if (!$execution['success']) {
+            return $this->failure($execution['error'], $page);
         }
-        
-        // Set timeout
-        stream_set_timeout($pipes[1], $this->timeout);
-        stream_set_timeout($pipes[2], $this->timeout);
-        
-        $stdout = stream_get_contents($pipes[1]);
-        $stderr = stream_get_contents($pipes[2]);
-        
-        foreach ($pipes as $pipe) {
-            fclose($pipe);
-        }
-        
-        $returnVar = proc_close($process);
-        
-        // Check for Python errors
-        if ($returnVar !== 0) {
-            error_log("Neshan Python exited with code: $returnVar, stderr: $stderr");
-            return [
-                'success' => false, 
-                'error' => 'Python script failed',
-                'stderr' => $stderr,
-                'places' => [],
-                'total' => 0,
-                'page' => $page,
-                'page_count' => 1,
-            ];
-        }
-        
-        // Parse JSON from stdout (last line should be JSON)
-        $lines = explode("\n", $stdout);
-        $jsonLine = '';
-        foreach (array_reverse($lines) as $line) {
-            $line = trim($line);
-            if (str_starts_with($line, '{') && str_ends_with($line, '}')) {
-                $jsonLine = $line;
-                break;
+
+        $data = $this->decodeJsonOutput($execution['stdout']);
+        if (!is_array($data)) {
+            $details = trim($execution['stderr']);
+            $message = 'Neshan returned an invalid response.';
+            if ($details !== '') {
+                $message .= ' ' . substr($details, 0, 500);
             }
+            error_log('Neshan response could not be decoded: ' . $details);
+            return $this->failure($message, $page);
         }
-        
-        if ($jsonLine) {
-            $data = json_decode($jsonLine, true);
-            
-            // Check for Python script errors
-            if (isset($data['error'])) {
-                error_log("Neshan Python error: " . $data['error']);
-                return [
-                    'success' => false,
-                    'error' => $data['error'],
-                    'places' => [],
-                    'total' => 0,
-                    'page' => $page,
-                    'page_count' => 1,
-                ];
+
+        if (!empty($data['error'])) {
+            $message = (string)$data['error'];
+            error_log('Neshan search error: ' . $message);
+            return $this->failure($message, $page);
+        }
+
+        if ($execution['exit_code'] > 0) {
+            $details = trim($execution['stderr']);
+            $message = 'Neshan search process failed.';
+            if ($details !== '') {
+                $message .= ' ' . substr($details, 0, 500);
             }
-            
-            if (json_last_error() === JSON_ERROR_NONE && isset($data[$category])) {
-                $places = $data[$category] ?? [];
-                
-                // Get pagination info
-                $pagination = $data['_pagination'][$category] ?? ['has_more' => false, 'page' => $page];
-                $hasMore = $pagination['has_more'] ?? false;
-                $currentPage = $pagination['page'] ?? $page;
-                
-                // Calculate total pages (estimate based on total results and max per page)
-                $perPage = 20;
-                $pageCount = $hasMore ? ceil(count($places) / $perPage) : ($currentPage > 1 ? $currentPage : 1);
-                
-                return [
-                    'success' => true,
-                    'places' => $places,
-                    'total' => count($places),
-                    'page' => $currentPage,
-                    'page_count' => $pageCount,
-                    'has_more' => $hasMore,
-                    'total_results' => count($places),
-                ];
-            }
+            error_log($message);
+            return $this->failure($message, $page);
         }
-        
-        // If JSON parsing failed, check stderr
-        if ($stderr) {
-            error_log("Neshan Python stderr: $stderr");
+
+        $places = $data[$category] ?? null;
+        if (!is_array($places)) {
+            return $this->failure('Neshan response did not include the requested category.', $page);
         }
-        
-        // Return empty results for consistent handling
+
+        $pagination = $data['_pagination'][$category] ?? [];
+        $currentPage = max(1, (int)($pagination['page'] ?? $page));
+        $hasMore = (bool)($pagination['has_more'] ?? false);
+        $knownTotal = $pagination['total_results'] ?? null;
+        $knownTotal = is_numeric($knownTotal) ? (int)$knownTotal : null;
+        $pageCount = max(1, (int)($pagination['page_count'] ?? ($hasMore ? $currentPage + 1 : $currentPage)));
+
         return [
-            'success' => true,
-            'places' => [],
-            'total' => 0,
-            'page' => $page,
-            'page_count' => 1,
-            'has_more' => false,
-            'total_results' => 0,
+            'success'       => true,
+            'places'        => $places,
+            'total'         => count($places),
+            'total_results' => $knownTotal,
+            'loaded_results'=> (int)($pagination['loaded_results'] ?? count($places)),
+            'page'          => $currentPage,
+            'page_count'    => $pageCount,
+            'has_more'      => $hasMore,
+            'complete'      => (bool)($pagination['complete'] ?? !$hasMore),
         ];
     }
 
     /**
-     * Fetch all results across all pages (for complete data export)
-     * 
-     * @param string $citySlug URL-safe city identifier
-     * @param string $category Category value
-     * @return array All places across all pages
+     * Fetch every page (for export jobs; normal requests should use search()).
      */
     public function searchAllPages(string $citySlug, string $category): array
     {
         $allPlaces = [];
         $page = 1;
-        $hasMore = true;
-        $maxPages = 50; // Safety limit to prevent infinite loops
-        
-        while ($hasMore && $page <= $maxPages) {
+        $maxPages = 50;
+
+        while ($page <= $maxPages) {
             $result = $this->search($citySlug, $category, $page);
-            
             if (!$result['success']) {
+                return $result;
+            }
+
+            foreach ($result['places'] as $place) {
+                $identity = $place['place_id'] ?? $place['neshan_url'] ?? json_encode($place);
+                $allPlaces[(string)$identity] = $place;
+            }
+
+            if (empty($result['has_more'])) {
                 break;
             }
-            
-            $places = $result['places'] ?? [];
-            $allPlaces = array_merge($allPlaces, $places);
-            
-            $hasMore = $result['has_more'] ?? false;
             $page++;
-            
-            // Small delay between pages to avoid overloading
-            if ($hasMore) {
-                usleep(500000); // 0.5 second
-            }
         }
-        
+
+        $places = array_values($allPlaces);
         return [
-            'success' => true,
-            'places' => $allPlaces,
-            'total' => count($allPlaces),
-            'page' => $page - 1,
-            'page_count' => $page - 1,
-            'has_more' => false,
-            'total_results' => count($allPlaces),
+            'success'       => true,
+            'places'        => $places,
+            'total'         => count($places),
+            'total_results' => count($places),
+            'loaded_results'=> count($places),
+            'page'          => $page,
+            'page_count'    => $page,
+            'has_more'      => false,
+            'complete'      => true,
         ];
     }
 
     /**
-     * Convert city slug to Persian city name
+     * Start the process without a shell so Persian text and paths are passed as
+     * exact arguments (and cannot be broken by nested quoting).
+     *
+     * @return array{success:bool, stdout:string, stderr:string, exit_code:int, error:string}
      */
+    private function runPython(array $command): array
+    {
+        if (!is_file($this->pythonScriptPath)) {
+            return [
+                'success' => false,
+                'stdout' => '',
+                'stderr' => '',
+                'exit_code' => -1,
+                'error' => 'Neshan search script was not found.',
+            ];
+        }
+
+        $descriptors = [
+            0 => ['pipe', 'r'],
+            1 => ['pipe', 'w'],
+            2 => ['pipe', 'w'],
+        ];
+
+        $process = @proc_open($command, $descriptors, $pipes, dirname($this->pythonScriptPath));
+        if (!is_resource($process)) {
+            return [
+                'success' => false,
+                'stdout' => '',
+                'stderr' => '',
+                'exit_code' => -1,
+                'error' => 'Could not start the Neshan search process.',
+            ];
+        }
+
+        fclose($pipes[0]);
+        stream_set_blocking($pipes[1], false);
+        stream_set_blocking($pipes[2], false);
+
+        $stdout = '';
+        $stderr = '';
+        $exitCode = -1;
+        $deadline = microtime(true) + $this->timeout;
+        $timedOut = false;
+
+        while (true) {
+            $status = proc_get_status($process);
+            if (!$status['running']) {
+                $exitCode = (int)$status['exitcode'];
+                $stdout .= stream_get_contents($pipes[1]) ?: '';
+                $stderr .= stream_get_contents($pipes[2]) ?: '';
+                break;
+            }
+
+            if (microtime(true) >= $deadline) {
+                $timedOut = true;
+                proc_terminate($process, 15);
+                $terminateDeadline = microtime(true) + 2;
+                do {
+                    usleep(100000);
+                    $status = proc_get_status($process);
+                } while (($status['running'] ?? false) && microtime(true) < $terminateDeadline);
+
+                if ($status['running'] ?? false) {
+                    proc_terminate($process, 9);
+                }
+                $stdout .= stream_get_contents($pipes[1]) ?: '';
+                $stderr .= stream_get_contents($pipes[2]) ?: '';
+                break;
+            }
+
+            $read = [$pipes[1], $pipes[2]];
+            $write = null;
+            $except = null;
+            @stream_select($read, $write, $except, 0, 200000);
+            foreach ($read as $readyPipe) {
+                $chunk = fread($readyPipe, 8192);
+                if ($chunk === false || $chunk === '') {
+                    continue;
+                }
+                if ($readyPipe === $pipes[1]) {
+                    $stdout .= $chunk;
+                } else {
+                    $stderr .= $chunk;
+                }
+            }
+        }
+
+        foreach ([1, 2] as $index) {
+            if (is_resource($pipes[$index])) {
+                fclose($pipes[$index]);
+            }
+        }
+        $closeCode = proc_close($process);
+        if ($exitCode < 0 && $closeCode >= 0) {
+            $exitCode = $closeCode;
+        }
+
+        if ($timedOut) {
+            return [
+                'success' => false,
+                'stdout' => $stdout,
+                'stderr' => $stderr,
+                'exit_code' => $exitCode,
+                'error' => 'Neshan search timed out. Please try again.',
+            ];
+        }
+
+        return [
+            'success' => $exitCode === 0 || trim($stdout) !== '',
+            'stdout' => $stdout,
+            'stderr' => $stderr,
+            'exit_code' => $exitCode,
+            'error' => $exitCode === 0 ? '' : 'Python script failed.',
+        ];
+    }
+
+    private function decodeJsonOutput(string $output): ?array
+    {
+        $decoded = json_decode(trim($output), true);
+        if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+            return $decoded;
+        }
+
+        $lines = preg_split('/\R/', $output) ?: [];
+        foreach (array_reverse($lines) as $line) {
+            $decoded = json_decode(trim($line), true);
+            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                return $decoded;
+            }
+        }
+
+        return null;
+    }
+
+    private function failure(string $error, int $page): array
+    {
+        return [
+            'success'       => false,
+            'error'         => $error,
+            'places'        => [],
+            'total'         => 0,
+            'total_results' => null,
+            'page'          => $page,
+            'page_count'    => 1,
+            'has_more'      => false,
+        ];
+    }
+
+    /** Convert a city slug back to its Persian display name. */
     private function slugToCityName(string $citySlug): string
     {
         $slugMap = [
@@ -249,8 +329,12 @@ final class NeshanClient
             'rasht' => 'رشت',
             'ardabil' => 'اردبیل',
             'bandar-abbas' => 'بندرعباس',
+            'urmia' => 'ارومیه',
+            'mashhad' => 'مشهد',
+            'karaj' => 'کرج',
+            'zahedan' => 'زاهدان',
         ];
-        
-        return $slugMap[$citySlug] ?? $citySlug;
+
+        return $slugMap[$citySlug] ?? rawurldecode($citySlug);
     }
 }

@@ -5,3 +5,5 @@ storage/logs/app.log
 .DS_Store
 composer.lock
 node_modules/
+__pycache__/
+*.py[cod]

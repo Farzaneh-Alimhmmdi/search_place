@@ -112,7 +112,7 @@ final class NeshanController
                     if ($this->results && !empty($this->results['places'])) {
                         $this->loadExistingCallLogs();
                     }
-                } catch (\Exception $e) {
+                } catch (\Throwable $e) {
                     Logger::error('Neshan Search failed', ['error' => $e->getMessage()]);
                     $this->error = 'خطا در ارتباط با سرور نشان';
                 }

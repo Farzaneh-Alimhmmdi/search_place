@@ -675,6 +675,10 @@ final class SearchView
                     }
                 }
                 $hasPlaces = !empty($this->results['places']);
+                $resultsTitle = $this->results['title'] ?? '';
+                if ($this->provider === 'neshan' && $categoryLabel !== '') {
+                    $resultsTitle = $categoryLabel;
+                }
                 ?>
                 <?php if (!$hasPlaces): ?>
                     <div class="empty-state">
@@ -686,11 +690,15 @@ final class SearchView
                         </div>
                     </div>
                 <?php else: ?>
-                    <div class="info">
-                        <strong><?= htmlspecialchars($this->results['title'] ?? '') ?></strong> -
-                        یافت شد: <?= $this->results['total'] ?> مورد
+                    <div class="info" id="resultsCount" data-title="<?= htmlspecialchars($resultsTitle) ?>">
+                        <strong><?= htmlspecialchars($resultsTitle) ?></strong> -
+                        <?php if ($this->provider === 'neshan'): ?>
+                            این صفحه: <?= count($this->results['places']) ?> مورد
+                        <?php else: ?>
+                            یافت شد: <?= $this->results['total'] ?> مورد
+                        <?php endif; ?>
                     </div>
-                    <div class="results-list">
+                    <div class="results-list" id="resultsList">
                         <?php foreach ($this->results['places'] as $place): ?>
                             <?php
                             $hasImage = !empty($place['image_preview']);
@@ -700,7 +708,7 @@ final class SearchView
                             $hasExistingLog = $hasPhone ? $this->hasExistingCallLog($place) : false;
                             $existingStatus = $hasPhone ? $this->getExistingCallLogStatus($place) : null;
                             ?>
-                            <div class="result-item <?= $hasImage ? 'has-image' : '' ?>">
+                            <div class="result-item <?= $hasImage ? 'has-image' : '' ?>" data-place-id="<?= htmlspecialchars((string)$placeId) ?>">
                                 <?php if ($hasImage): ?>
                                     <img src="<?= htmlspecialchars($place['image_preview']) ?>"
                                          alt="<?= htmlspecialchars($place['name']) ?>"
@@ -721,6 +729,14 @@ final class SearchView
                                                 <i>📍</i>
                                                 <span class="label">آدرس:</span>
                                                 <span class="value"><?= htmlspecialchars($place['address']) ?></span>
+                                            </div>
+                                        <?php endif; ?>
+
+                                        <?php if ($this->provider === 'neshan' && !empty($place['category'])): ?>
+                                            <div class="meta-row">
+                                                <i>🏷️</i>
+                                                <span class="label">نوع:</span>
+                                                <span class="value"><?= htmlspecialchars($place['category']) ?></span>
                                             </div>
                                         <?php endif; ?>
 
@@ -1024,13 +1040,53 @@ final class SearchView
 
                         <?php endif; ?>
 
+                    <?php elseif (
+                        $this->provider === 'neshan'
+                        && (!empty($this->results['has_more']) || $this->currentPage > 1)
+                    ): ?>
+                        <?php $neshanHasMore = !empty($this->results['has_more']); ?>
+                        <div
+                            class="pagination"
+                            id="neshanPagination"
+                            style="display:flex; justify-content:center; align-items:center; gap:12px; margin-top:24px; padding:16px 0; flex-wrap:wrap;"
+                        >
+                            <?php if ($this->currentPage > 1): ?>
+                                <form method="POST" style="display:inline;">
+                                    <input type="hidden" name="provider" value="neshan">
+                                    <input type="hidden" name="city" value="<?= htmlspecialchars($this->selectedCity) ?>">
+                                    <input type="hidden" name="place" value="<?= htmlspecialchars($this->selectedCategory) ?>">
+                                    <input type="hidden" name="page" value="<?= max(1, $this->currentPage - 1) ?>">
+                                    <button type="submit" class="btn-link btn-link-secondary">← صفحه قبلی</button>
+                                </form>
+                            <?php endif; ?>
+
+                            <div class="pagination-info" style="font-size:14px; color:#555;">
+                                صفحه <?= $this->currentPage ?>
+                                <?php if ($neshanHasMore): ?>
+                                    <span style="color:#888;">— نتایج بیشتری موجود است</span>
+                                <?php else: ?>
+                                    <span style="color:#888;">— پایان نتایج</span>
+                                <?php endif; ?>
+                            </div>
+
+                            <?php if ($neshanHasMore): ?>
+                                <form method="POST" id="neshanLoadMoreForm" style="display:inline;">
+                                    <input type="hidden" name="provider" value="neshan">
+                                    <input type="hidden" name="city" value="<?= htmlspecialchars($this->selectedCity) ?>">
+                                    <input type="hidden" name="place" value="<?= htmlspecialchars($this->selectedCategory) ?>">
+                                    <input type="hidden" name="page" value="<?= $this->currentPage + 1 ?>">
+                                    <button type="submit" class="btn-link btn-link-primary">
+                                        بارگذاری نتایج بیشتر ↓
+                                    </button>
+                                    <span id="neshanLoadMoreStatus" role="status" style="font-size:13px; color:#b42318;"></span>
+                                </form>
+                            <?php endif; ?>
+                        </div>
 
                     <?php elseif ($this->totalPages > 1): ?>
 
                         <!--
-                            EXISTING BALAD / NEShan / GOOGLE PAGINATION
-
-                            DO NOT CHANGE THIS PART.
+                            Existing numbered pagination for providers with known page counts.
                         -->
 
                         <div
@@ -1347,63 +1403,130 @@ final class SearchView
                     updateCities(provinceSelect.value);
                 }
 
-                // Handle call button clicks
-                const callButtons = document.querySelectorAll('.call-btn');
-                callButtons.forEach(btn => {
-                    btn.addEventListener('click', function() {
-                        const placeId = this.dataset.placeId;
-                        const phone = this.dataset.phone;
-                        const name = this.dataset.name;
-                        const city = this.dataset.city;
-                        const category = this.dataset.category;
+                // Delegate call-button clicks so buttons appended by Neshan's
+                // load-more pagination continue to work.
+                document.addEventListener('click', function(event) {
+                    const btn = event.target.closest('.call-btn');
+                    if (!btn) return;
 
-                        if (!placeId) {
-                            alert('شناسه مکان یافت نشد');
-                            return;
+                    const placeId = btn.dataset.placeId;
+                    const phone = btn.dataset.phone;
+                    const name = btn.dataset.name;
+                    const city = btn.dataset.city;
+                    const category = btn.dataset.category;
+
+                    if (!placeId) {
+                        alert('شناسه مکان یافت نشد');
+                        return;
+                    }
+
+                    const description = `تماس با ${name} (${category}) در ${city} - شماره: ${phone}`;
+                    btn.classList.add('loading');
+                    btn.disabled = true;
+
+                    const formData = new FormData();
+                    formData.append('action', 'call');
+                    formData.append('place_id', placeId);
+                    formData.append('phone', phone);
+                    formData.append('city', city);
+                    formData.append('category', category);
+                    formData.append('description', description);
+
+                    fetch('', {method: 'POST', body: formData})
+                        .then(response => response.json())
+                        .then(data => {
+                            btn.classList.remove('loading');
+                            btn.disabled = false;
+                            if (data.success) {
+                                alert('تماس با موفقیت ثبت شد (وضعیت: در انتظار)');
+                                btn.innerHTML = '<span class="btn-text">✅ ثبت شده</span>';
+                                btn.style.background = '#27ae60';
+                                btn.disabled = true;
+                            } else {
+                                alert(data.message || 'خطا در ثبت تماس');
+                            }
+                        })
+                        .catch(error => {
+                            btn.classList.remove('loading');
+                            btn.disabled = false;
+                            alert('خطا در ارتباط با سرور');
+                            console.error('Call log error:', error);
+                        });
+                });
+
+                // Neshan's result list is paginated on the server and appended
+                // here so "load more" keeps earlier cards visible. Normal form
+                // submission remains available when JavaScript is disabled.
+                document.addEventListener('submit', async function(event) {
+                    const loadMoreForm = event.target.closest('#neshanLoadMoreForm');
+                    if (!loadMoreForm) return;
+                    event.preventDefault();
+
+                    const button = loadMoreForm.querySelector('button[type="submit"]');
+                    const oldButtonText = button ? button.textContent.trim() : '';
+                    const status = loadMoreForm.querySelector('[role="status"]');
+                    if (button) {
+                        button.disabled = true;
+                        button.textContent = 'در حال بارگذاری...';
+                    }
+                    if (status) status.textContent = '';
+
+                    try {
+                        const response = await fetch(loadMoreForm.action || window.location.href, {
+                            method: 'POST',
+                            body: new FormData(loadMoreForm),
+                            credentials: 'same-origin',
+                            headers: {'X-Requested-With': 'XMLHttpRequest'}
+                        });
+                        const html = await response.text();
+                        const nextDocument = new DOMParser().parseFromString(html, 'text/html');
+                        const nextList = nextDocument.getElementById('resultsList');
+                        if (!response.ok || !nextList) {
+                            const serverError = nextDocument.querySelector('.error');
+                            throw new Error(serverError ? serverError.textContent.trim() : 'بارگذاری نتایج ناموفق بود.');
                         }
 
-                        // Auto-generate description from place info
-                        const description = `تماس با ${name} (${category}) در ${city} - شماره: ${phone}`;
+                        const currentList = document.getElementById('resultsList');
+                        const seenIds = new Set(Array.from(currentList.querySelectorAll('.result-item'))
+                            .map(item => item.dataset.placeId)
+                            .filter(Boolean));
+                        let added = 0;
+                        nextList.querySelectorAll('.result-item').forEach(item => {
+                            const placeId = item.dataset.placeId;
+                            if (placeId && seenIds.has(placeId)) return;
+                            currentList.appendChild(document.importNode(item, true));
+                            if (placeId) seenIds.add(placeId);
+                            added++;
+                        });
 
-                        // Disable button and show loading
-                        this.classList.add('loading');
-                        this.disabled = true;
+                        const currentPagination = document.getElementById('neshanPagination');
+                        const nextPagination = nextDocument.getElementById('neshanPagination');
+                        if (currentPagination && nextPagination) {
+                            currentPagination.replaceWith(document.importNode(nextPagination, true));
+                        } else if (currentPagination) {
+                            currentPagination.remove();
+                        } else if (nextPagination) {
+                            currentList.insertAdjacentElement('afterend', document.importNode(nextPagination, true));
+                        }
 
-                        // Send AJAX request
-                        const formData = new FormData();
-                        formData.append('action', 'call');
-                        formData.append('place_id', placeId);
-                        formData.append('phone', phone);
-                        formData.append('city', city);
-                        formData.append('category', category);
-                        formData.append('description', description);
-
-                        fetch('', {
-                            method: 'POST',
-                            body: formData
-                        })
-                            .then(response => response.json())
-                            .then(data => {
-                                this.classList.remove('loading');
-                                this.disabled = false;
-
-                                if (data.success) {
-                                    alert('تماس با موفقیت ثبت شد (وضعیت: در انتظار)');
-                                    // Update button to show it's been logged
-                                    this.innerHTML = '<span class="btn-text">✅ ثبت شده</span>';
-                                    this.style.background = '#27ae60';
-                                    this.disabled = true;
-                                } else {
-                                    alert(data.message || 'خطا در ثبت تماس');
-                                }
-                            })
-                            .catch(error => {
-                                this.classList.remove('loading');
-                                this.disabled = false;
-                                alert('خطا در ارتباط با سرور');
-                                console.error('Call log error:', error);
-                            });
-                    });
+                        const countLabel = document.getElementById('resultsCount');
+                        if (countLabel) {
+                            const title = countLabel.dataset.title || countLabel.querySelector('strong')?.textContent || '';
+                            countLabel.textContent = `${title} - نمایش ${currentList.querySelectorAll('.result-item').length} نتیجه`;
+                        }
+                        if (added === 0) {
+                            const loadStatus = document.querySelector('#neshanLoadMoreStatus');
+                            if (loadStatus) loadStatus.textContent = 'نتیجه جدیدی دریافت نشد.';
+                        }
+                    } catch (error) {
+                        const currentStatus = document.querySelector('#neshanLoadMoreStatus');
+                        if (currentStatus) currentStatus.textContent = error.message || 'بارگذاری نتایج ناموفق بود.';
+                        const currentButton = document.querySelector('#neshanLoadMoreForm button[type="submit"]');
+                        if (currentButton) {
+                            currentButton.disabled = false;
+                            currentButton.textContent = oldButtonText || 'بارگذاری نتایج بیشتر ↓';
+                        }
+                    }
                 });
 
                 // ----- Divar phone reveal + OTP login -----
