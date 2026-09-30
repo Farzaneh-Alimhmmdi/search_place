@@ -115,6 +115,7 @@ PLACE_KIND_TERMS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("religious", ("مسجد", "حسینیه", "امامزاده", "کلیسا")),
     ("event", ("سمینار", "همایش", "کنفرانس", "جشنواره", "نمایشگاه", "تالار")),
     ("service", ("نیازمندی", "آگهی", "شرکت خدماتی", "دفتر خدمات", "مرکز جامع")),
+    ("organization", ("سازمان", "بنیاد", "موسسه", "مؤسسه", "اداره", "دفتر", "گروه", "شرکت", "نهاد", "شهرداری")),
 )
 
 NOISE_LINES = {
@@ -220,20 +221,26 @@ def detect_place_kind(lines: list[str]) -> tuple[Optional[str], Optional[str]]:
 
 
 def is_relevant_record(name: str, card_lines: list[str], category: Category) -> bool:
-    """Reject clear search false-positives while retaining matching place cards."""
-    wanted_kind = category.value
-    wanted_terms = CATEGORY_TERMS.get(wanted_kind, (category.label,))
-    name_text = normalize_text(name)
-    all_text = normalize_text(" ".join([name, *card_lines]))
-
-    # The type shown by Neshan is more reliable than a broad full-text hit.
+    """Drop clear non-accommodation results without losing Neshan's ranked hits."""
     detected_kind, _ = detect_place_kind(card_lines[1:] + [name])
-    if detected_kind is not None:
-        return detected_kind == wanted_kind
 
-    # If the card does not show a type, require the requested category in its
-    # name/card text instead of accepting a neighboring search suggestion.
-    return _has_any(name_text, wanted_terms) or _has_any(all_text, wanted_terms)
+    # The form searches accommodation types. Keep all accommodation types that
+    # Neshan returns (the app may mix hotels, guest houses, hostels, etc.) rather
+    # than forcing an exact type match and dropping its first/ranked result.
+    if detected_kind in CATEGORY_TERMS:
+        return True
+
+    if detected_kind is not None:
+        return False
+
+    # An unclassified place link is still an actual result from Neshan. Do not
+    # silently discard it just because its brand name omits the query word.
+    # If this searcher is later used for a non-accommodation category, retain
+    # the older query-term check for that unsupported category.
+    if category.value not in CATEGORY_TERMS:
+        all_text = normalize_text(" ".join([name, *card_lines]))
+        return _has_any(all_text, (category.label,))
+    return True
 
 
 def _clean_lines(text: str) -> list[str]:
@@ -373,7 +380,7 @@ class NeshanSearcher:
     """Use the Neshan web search result list as the source of place cards."""
 
     SEARCH_URL = "https://neshan.org/maps/search"
-    CACHE_VERSION = 2
+    CACHE_VERSION = 3
     DEFAULT_CACHE_TTL = 600
     MAX_SCROLL_STEPS = 60
     STABLE_SCROLLS_TO_FINISH = 3

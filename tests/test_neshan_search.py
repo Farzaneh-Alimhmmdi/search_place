@@ -58,17 +58,22 @@ class NeshanSearchHelpersTest(unittest.TestCase):
             )
         )
 
-    def test_accepts_the_requested_type_and_rejects_a_different_type(self):
+    def test_keeps_other_lodging_types_and_unknown_ranked_results(self):
         hotel = Category("hotel", "هتل")
         self.assertTrue(
             is_relevant_record("هتل اسپارو", ["هتل اسپارو", "هتل", "در حال ساخت"], hotel)
         )
-        self.assertFalse(
+        # Neshan can rank hostels/guest-houses with a hotel query. Don't lose
+        # those app results by requiring an exact category-label match.
+        self.assertTrue(
             is_relevant_record(
                 "خوابگاه نمایندگی دانشگاه علوم پزشکی",
                 ["خوابگاه نمایندگی دانشگاه علوم پزشکی", "خوابگاه و پانسیون"],
                 hotel,
             )
+        )
+        self.assertTrue(
+            is_relevant_record("پردیس دُر متین", ["پردیس دُر متین"], hotel)
         )
         self.assertFalse(
             is_relevant_record(

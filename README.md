@@ -58,8 +58,9 @@ The project follows a clean architecture pattern with separate components for:
 
 Neshan's public map results are an infinite-scrolling list, not a numbered API.
 The Neshan provider now reads actual place links/cards, filters cards whose
-reported type clearly conflicts with the selected category, and scrolls the
-list to produce 20-result pages. The **بارگذاری نتایج بیشتر** button appends the
+reported type is clearly not an accommodation, and scrolls the list to produce
+20-result pages. It preserves Neshan-ranked results when their type is ambiguous
+and keeps different accommodation types rather than silently dropping them. The **بارگذاری نتایج بیشتر** button appends the
 next page without removing earlier cards. Neshan does not expose a reliable
 result total, so the UI only shows the count currently loaded instead of
 inventing a total.

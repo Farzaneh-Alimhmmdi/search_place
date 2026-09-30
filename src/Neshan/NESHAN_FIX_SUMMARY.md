@@ -11,8 +11,9 @@ page exists.
   only that search URL (no extra homepage request).
 - Results are extracted from Neshan place links and their individual cards,
   instead of scanning every DOM element. The scraper uses stable Neshan place
-  IDs and filters cards whose displayed type is clearly unrelated to the
-  selected category.
+  IDs and filters only cards whose displayed type is clearly non-accommodation.
+  It keeps Neshan-ranked results with unknown types and does not drop other
+  lodging types solely because their label differs from the selected filter.
 - The first request loads the requested page plus one page of look-ahead. Later
   requests use a short-lived cache, so clicking **بارگذاری نتایج بیشتر** does
   not immediately make another Neshan search request. The UI appends the next
