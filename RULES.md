@@ -37,8 +37,11 @@
 ### 6. Performance Optimization
 - Cache frequently accessed data where possible
 - Implement pagination for large result sets
+  (exception: the collection page `/divar_collect`, see rule 13 - it stores
+  everything in the database and shows no list at all)
 - Use efficient data structures for quick lookups
 - Minimize unnecessary API calls by reusing existing data
+- Never hold a whole result set in PHP memory: process and store it in batches
 
 ### 7. Error Handling
 - Display user-friendly error messages in Persian
@@ -78,3 +81,25 @@
 - Call logging should occur immediately when the action is triggered
 - All call data must be sanitized before database insertion
 - Logs should be recorded for auditing and analytics purposes
+
+### 13. Divar Collection Page (`/divar_collect`)
+- The selection inputs must stay identical to the Divar search page: province,
+  city, category and the optional keyword
+- This page stores the results in the database instead of displaying them: no
+  result cards and no pagination (approved exception to rule 6)
+- Only two tables are used: `contacts` and `accommodations`
+  (see `database/schema.sql`). The collector must not add its own bookkeeping
+  table; run state lives in the PHP session
+- Large result sets must be harvested in small steps: one HTTP request fetches
+  exactly one Divar page and writes that one batch
+- Divar's cursor is kept server side (PHP session) so a run can be paused and
+  resumed, also after a page reload
+- Every write must be an upsert on the unique key `(provider, external_id)`, so
+  re-running or resuming a search can never create duplicates
+- Values that later steps fill in (`contact_id`, `latitude`, `longitude`,
+  `price`) must not be overwritten with NULL by a re-run of the collector
+- A failed step must not move the cursor forward, so the same page can simply be
+  fetched again
+- Phone numbers are NOT collected here; that is a later step which writes into
+  `contacts` and links `accommodations.contact_id`
+- Progress, counters and errors are reported to the user in Persian

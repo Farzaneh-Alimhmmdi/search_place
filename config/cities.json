@@ -10,156 +10,182 @@
     "name": "کرج",
     "province": "البرز",
     "slug": "karaj",
-    "divar_slug": "karaj"
+    "divar_slug": "karaj",
+    "city_id": 2
   },
   "isfahan": {
     "name": "اصفهان",
     "province": "اصفهان",
     "slug": "isfahan",
-    "divar_slug": "isfahan"
+    "divar_slug": "isfahan",
+    "city_id": 4
   },
   "mashhad": {
     "name": "مشهد",
     "province": "خراسان رضوی",
     "slug": "mashhad",
-    "divar_slug": "mashhad"
+    "divar_slug": "mashhad",
+    "city_id": 3
   },
   "tabriz": {
     "name": "تبریز",
     "province": "آذربایجان شرقی",
     "slug": "tabriz",
-    "divar_slug": "tabriz"
+    "divar_slug": "tabriz",
+    "city_id": 5
   },
   "shiraz": {
     "name": "شیراز",
     "province": "فارس",
     "slug": "shiraz",
-    "divar_slug": "shiraz"
+    "divar_slug": "shiraz",
+    "city_id": 6
   },
   "ahvaz": {
     "name": "اهواز",
     "province": "خوزستان",
     "slug": "ahvaz",
-    "divar_slug": "ahvaz"
+    "divar_slug": "ahvaz",
+    "city_id": 7
   },
   "qom": {
     "name": "قم",
     "province": "قم",
     "slug": "qom",
-    "divar_slug": "qom"
+    "divar_slug": "qom",
+    "city_id": 8
   },
   "kermanshah": {
     "name": "کرمانشاه",
     "province": "کرمانشاه",
     "slug": "kermanshah",
-    "divar_slug": "kermanshah"
+    "divar_slug": "kermanshah",
+    "city_id": 9
   },
   "urmia": {
     "name": "ارومیه",
     "province": "آذربایجان غربی",
     "slug": "urmia",
-    "divar_slug": "urmia"
+    "divar_slug": "urmia",
+    "city_id": 10
   },
   "rasht": {
     "name": "رشت",
     "province": "گیلان",
     "slug": "rasht",
-    "divar_slug": "rasht"
+    "divar_slug": "rasht",
+    "city_id": 12
   },
   "zahedan": {
     "name": "زاهدان",
     "province": "سیستان و بلوچستان",
     "slug": "zahedan",
-    "divar_slug": "zahedan"
+    "divar_slug": "zahedan",
+    "city_id": 11
   },
   "hamadan": {
     "name": "همدان",
     "province": "همدان",
     "slug": "hamadan",
-    "divar_slug": "hamadan"
+    "divar_slug": "hamadan",
+    "city_id": 14
   },
   "kerman": {
     "name": "کرمان",
     "province": "کرمان",
     "slug": "kerman",
-    "divar_slug": "kerman"
+    "divar_slug": "kerman",
+    "city_id": 13
   },
   "ardabil": {
     "name": "اردبیل",
     "province": "اردبیل",
     "slug": "ardabil",
-    "divar_slug": "ardabil"
+    "divar_slug": "ardabil",
+    "city_id": 17
   },
   "yazd": {
     "name": "یزد",
     "province": "یزد",
     "slug": "yazd",
-    "divar_slug": "yazd"
+    "divar_slug": "yazd",
+    "city_id": 16
   },
   "ardakan": {
     "name": "اردکان",
     "province": "یزد",
     "slug": "ardakan",
-    "divar_slug": "ardakan"
+    "divar_slug": "ardakan",
+    "city_id": 846
   },
   "bandar-abbas": {
     "name": "بندر عباس",
     "province": "هرمزگان",
     "slug": "bandar-abbas",
-    "divar_slug": "bandar-abbas"
+    "divar_slug": "bandar-abbas",
+    "city_id": 18
   },
   "khorramabad": {
     "name": "خرم آباد",
     "province": "لرستان",
     "slug": "khorramabad",
-    "divar_slug": "khorramabad"
+    "divar_slug": "khorramabad",
+    "city_id": 27
   },
   "sanandaj": {
     "name": "سنندج",
     "province": "کردستان",
     "slug": "sanandaj",
-    "divar_slug": "sanandaj"
+    "divar_slug": "sanandaj",
+    "city_id": 28
   },
   "gorgan": {
     "name": "گرگان",
     "province": "گلستان",
     "slug": "gorgan",
-    "divar_slug": "gorgan"
+    "divar_slug": "gorgan",
+    "city_id": 21
   },
   "sari": {
     "name": "ساری",
     "province": "مازندران",
     "slug": "sari",
-    "divar_slug": "sari"
+    "divar_slug": "sari",
+    "city_id": 22
   },
   "babol": {
     "name": "بابل",
     "province": "مازندران",
     "slug": "babol",
-    "divar_slug": "babol"
+    "divar_slug": "babol",
+    "city_id": 664
   },
   "amol": {
     "name": "آمل",
     "province": "مازندران",
     "slug": "amol",
-    "divar_slug": "amol"
+    "divar_slug": "amol",
+    "city_id": 663
   },
   "chalus": {
     "name": "چالوس",
     "province": "مازندران",
     "slug": "chalus",
-    "divar_slug": "chalus"
+    "divar_slug": "chalus",
+    "city_id": 835
   },
   "noshahr": {
     "name": "نوشهر",
     "province": "مازندران",
     "slug": "noshahr",
-    "divar_slug": "noshahr"
+    "divar_slug": "noshahr",
+    "city_id": 709
   },
   "tonekabon": {
     "name": "تنکابن",
     "province": "مازندران",
     "slug": "tonekabon",
-    "divar_slug": "tonekabon"
+    "divar_slug": "tonekabon",
+    "city_id": 833
   }
 }
