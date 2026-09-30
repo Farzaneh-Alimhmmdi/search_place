@@ -24,17 +24,27 @@ page exists.
 - PHP starts Python with an argument array (not nested shell quoting), captures
   errors, and enforces a process timeout. Empty/broken responses no longer look
   like successful searches.
-- The Playwright-managed Chromium is used by default. Set `CHROME_PATH` only if
-  a specific installed Chrome/Chromium binary is required.
+- An already-installed Chrome/Chromium is detected and reused first, including
+  Chrome's standard Windows installation paths. Set `CHROME_PATH` when the
+  browser is installed in a custom location. Playwright's downloaded Chromium
+  is used only when no local browser is found.
 
 ## Install / run
 
 ```bash
 pip install -r src/Neshan/requirments
+```
+
+An installed Chrome/Chromium is reused when available. If the machine has no
+system browser, install Playwright's browser binary as well:
+
+```bash
 python -m playwright install chromium
 ```
 
-The Python script caches results for 10 minutes under the system temporary
+On slow or proxied networks, set `PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT` (in
+milliseconds) and configure `HTTPS_PROXY` if needed before installing. The
+Python script caches results for 10 minutes under the system temporary
 folder. If Neshan returns HTTP 429, the app displays a retry-later error rather
 than presenting a misleading empty result list. Neshan may still limit access;
 this project does not bypass that limit.

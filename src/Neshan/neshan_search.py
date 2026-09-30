@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 import time
@@ -131,6 +132,54 @@ PHONE_PATTERN = re.compile(r"(?<!\d)(?:\+?98|0)\d{9,10}(?!\d)")
 
 PERSIAN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
 PERSIAN_TEXT = str.maketrans({"ي": "ی", "ى": "ی", "ك": "ک", "ـ": "", "\u200c": " "})
+
+
+def find_system_browser(platform_name: Optional[str] = None) -> Optional[str]:
+    """Find a browser already installed on the machine before downloading one."""
+    platform_name = platform_name or sys.platform
+    candidates: list[str] = []
+
+    configured_path = os.environ.get("CHROME_PATH", "").strip().strip('"').strip("'")
+    if configured_path:
+        candidates.append(configured_path)
+
+    if platform_name == "win32":
+        roots = [
+            os.environ.get("ProgramFiles", ""),
+            os.environ.get("ProgramFiles(x86)", ""),
+            os.environ.get("LOCALAPPDATA", ""),
+        ]
+        for root in roots:
+            if root:
+                candidates.extend([
+                    str(Path(root) / "Google" / "Chrome" / "Application" / "chrome.exe"),
+                    str(Path(root) / "Microsoft" / "Edge" / "Application" / "msedge.exe"),
+                ])
+    elif platform_name == "darwin":
+        candidates.extend([
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            str(Path.home() / "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        ])
+    else:
+        candidates.extend([
+            "/usr/bin/google-chrome",
+            "/usr/bin/google-chrome-stable",
+            "/usr/bin/chromium",
+            "/usr/bin/chromium-browser",
+            "/usr/bin/microsoft-edge",
+        ])
+
+    for executable in ("chrome", "google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "msedge"):
+        resolved = shutil.which(executable)
+        if resolved:
+            candidates.append(resolved)
+
+    for candidate in candidates:
+        path = Path(candidate).expanduser()
+        if path.is_file():
+            return str(path)
+    return None
 
 
 def normalize_text(value: Any) -> str:
@@ -450,12 +499,15 @@ class NeshanSearcher:
                         "--disable-gpu",
                     ],
                 }
-                # Use a system browser only when explicitly configured and found.
-                # Otherwise let Playwright use its bundled Chromium (works on Linux
-                # servers as well as developer machines).
-                chrome_path = os.environ.get("CHROME_PATH", "").strip()
-                if chrome_path and Path(chrome_path).is_file():
+                # Reuse the user's installed Chrome/Chromium (including the
+                # default Windows Chrome path used by the original script). Only
+                # fall back to Playwright's downloaded browser when none exists.
+                chrome_path = find_system_browser()
+                if chrome_path:
+                    print(f"Using installed browser: {chrome_path}", file=sys.stderr)
                     launch_options["executable_path"] = chrome_path
+                else:
+                    print("No installed Chrome/Chromium found; using Playwright's bundled browser.", file=sys.stderr)
 
                 browser = playwright.chromium.launch(**launch_options)
                 try:

@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,6 +8,7 @@ from src.Neshan.neshan_search import (
     Category,
     NeshanSearcher,
     detect_place_kind,
+    find_system_browser,
     is_relevant_record,
     normalize_text,
     paginate_results,
@@ -15,6 +17,29 @@ from src.Neshan.neshan_search import (
 
 
 class NeshanSearchHelpersTest(unittest.TestCase):
+    def test_prefers_configured_installed_browser(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            browser = Path(temp_dir) / "chrome.exe"
+            browser.touch()
+            with patch.dict(os.environ, {"CHROME_PATH": str(browser)}):
+                self.assertEqual(find_system_browser(), str(browser))
+
+    def test_auto_detects_chrome_in_standard_windows_location(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            browser = Path(temp_dir) / "Google" / "Chrome" / "Application" / "chrome.exe"
+            browser.parent.mkdir(parents=True)
+            browser.touch()
+            with patch.dict(
+                os.environ,
+                {
+                    "CHROME_PATH": "",
+                    "ProgramFiles": temp_dir,
+                    "ProgramFiles(x86)": "",
+                    "LOCALAPPDATA": "",
+                },
+            ):
+                self.assertEqual(find_system_browser("win32"), str(browser))
+
     def test_normalizes_persian_letters_digits_and_joiners(self):
         self.assertEqual(normalize_text("هتل‌ در تهران ۱۲۳"), "هتل در تهران 123")
         self.assertEqual(normalize_text("كافه ياس"), "کافه یاس")

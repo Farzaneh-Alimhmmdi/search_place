@@ -69,15 +69,17 @@ for subsequent requests. The cache is temporary (10 minutes) and lives outside
 the repository. If Neshan returns HTTP 429, the search page reports that the
 provider is rate-limiting requests and asks the user to retry later.
 
-Install the Python dependency and Playwright's managed browser on the server:
+Install the Python dependency on the server:
 
 ```bash
 pip install -r src/Neshan/requirments
-python -m playwright install chromium
 ```
 
-Set `CHROME_PATH` only when a particular installed Chrome/Chromium binary is
-required. See `src/Neshan/NESHAN_FIX_SUMMARY.md` for details.
+The scraper reuses an installed Chrome/Chromium first (including the standard
+Windows Chrome locations). Set `CHROME_PATH` if it is installed in a custom
+location. Only when no system browser is available, install Playwright's browser
+with `python -m playwright install chromium`. See
+`src/Neshan/NESHAN_FIX_SUMMARY.md` for details.
 
 ## Divar Collection Page (`/divar_collect`)
 A second Divar page whose only job is to **fetch everything and store it in the
