@@ -359,4 +359,259 @@ final class AccommodationRepository
 
         return $values;
     }
+
+    /**
+     * Find accommodations that do not have a contact phone number yet.
+     *
+     * @param int $limit Max records to return
+     * @param string|null $city Optional city filter
+     * @param bool $retryFailed Whether to retry items previously marked as failed/no_phone
+     * @param int $maxAttempts Max attempts before an ad is excluded
+     * @return array<int,array<string,mixed>>
+     */
+    public function findPendingPhoneAccommodations(
+        int $limit = 20,
+        ?string $city = null,
+        bool $retryFailed = false,
+        int $maxAttempts = 3
+    ): array {
+        $sql = 'SELECT id, provider, external_id, title, city, province, category, provider_data, created_at ' .
+               'FROM accommodations ' .
+               'WHERE provider = ? ' .
+               'AND contact_id IS NULL ';
+
+        $params = [DivarAdMapper::PROVIDER];
+
+        if ($city !== null && $city !== '') {
+            $sql .= 'AND (city = ? OR province = ?) ';
+            $params[] = $city;
+            $params[] = $city;
+        }
+
+        if (!$retryFailed) {
+            // Exclude already processed statuses like 'found', 'no_phone', 'expired', 'chat_only'
+            // and enforce max attempts
+            $sql .= 'AND (
+                provider_data IS NULL
+                OR JSON_UNQUOTE(JSON_EXTRACT(provider_data, "$.contact_status")) IS NULL
+                OR JSON_UNQUOTE(JSON_EXTRACT(provider_data, "$.contact_status")) IN ("pending", "retry")
+            ) ';
+            $sql .= 'AND (
+                provider_data IS NULL
+                OR COALESCE(JSON_EXTRACT(provider_data, "$.contact_attempts"), 0) < ?
+            ) ';
+            $params[] = $maxAttempts;
+        } else {
+            // Include everything except already found
+            $sql .= 'AND (
+                provider_data IS NULL
+                OR JSON_UNQUOTE(JSON_EXTRACT(provider_data, "$.contact_status")) != "found"
+            ) ';
+        }
+
+        $sql .= 'ORDER BY id ASC LIMIT ' . (int) $limit;
+
+        try {
+            $stmt = $this->pdo->prepare($sql);
+            $stmt->execute($params);
+            return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        } catch (Throwable $e) {
+            Logger::error('Failed to query pending phone accommodations', [
+                'error' => $e->getMessage(),
+                'sql' => $sql,
+            ]);
+            return [];
+        }
+    }
+
+    /**
+     * Count divar accommodations that do not have a contact_id.
+     */
+    public function countPendingPhone(?string $city = null): int
+    {
+        $sql = 'SELECT COUNT(*) FROM accommodations WHERE provider = ? AND contact_id IS NULL';
+        $params = [DivarAdMapper::PROVIDER];
+
+        if ($city !== null && $city !== '') {
+            $sql .= ' AND (city = ? OR province = ?)';
+            $params[] = $city;
+            $params[] = $city;
+        }
+
+        try {
+            $stmt = $this->pdo->prepare($sql);
+            $stmt->execute($params);
+            return (int) $stmt->fetchColumn();
+        } catch (Throwable $e) {
+            Logger::warning('Could not count pending phone accommodations', ['error' => $e->getMessage()]);
+            return 0;
+        }
+    }
+
+    /**
+     * Count divar accommodations that have a linked contact.
+     */
+    public function countWithPhone(?string $city = null): int
+    {
+        $sql = 'SELECT COUNT(*) FROM accommodations WHERE provider = ? AND contact_id IS NOT NULL';
+        $params = [DivarAdMapper::PROVIDER];
+
+        if ($city !== null && $city !== '') {
+            $sql .= ' AND (city = ? OR province = ?)';
+            $params[] = $city;
+            $params[] = $city;
+        }
+
+        try {
+            $stmt = $this->pdo->prepare($sql);
+            $stmt->execute($params);
+            return (int) $stmt->fetchColumn();
+        } catch (Throwable $e) {
+            Logger::warning('Could not count accommodations with phone', ['error' => $e->getMessage()]);
+            return 0;
+        }
+    }
+
+    /**
+     * Find existing contact by phone or create a new one.
+     * Guaranteed safe against unique constraint collisions.
+     *
+     * @param string $phone Sanitized phone number (e.g. 09123456789)
+     * @param string|null $name Optional contact name / ad title
+     * @param string|null $notes Optional notes
+     * @return int Contact ID
+     */
+    public function findOrCreateContact(string $phone, ?string $name = null, ?string $notes = null): int
+    {
+        // 1. Check if contact exists
+        $findStmt = $this->pdo->prepare('SELECT id FROM contacts WHERE phone = ? LIMIT 1');
+        $findStmt->execute([$phone]);
+        $existingId = $findStmt->fetchColumn();
+
+        if ($existingId !== false && $existingId !== null) {
+            return (int) $existingId;
+        }
+
+        // 2. Insert new contact, safely handling concurrency with ON DUPLICATE KEY UPDATE
+        $insertSql = 'INSERT INTO contacts (phone, name, notes, created_at, updated_at) ' .
+                     'VALUES (?, ?, ?, NOW(), NOW()) ' .
+                     'ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id), updated_at = NOW()';
+
+        $insertStmt = $this->pdo->prepare($insertSql);
+        $insertStmt->execute([$phone, $name, $notes]);
+
+        $lastId = (int) $this->pdo->lastInsertId();
+        if ($lastId > 0) {
+            return $lastId;
+        }
+
+        // Fallback: re-select in case LAST_INSERT_ID did not return it
+        $findStmt->execute([$phone]);
+        return (int) $findStmt->fetchColumn();
+    }
+
+    /**
+     * Link a contact to an accommodation and update provider_data with found status.
+     */
+    public function linkContactToAccommodation(int $accommodationId, int $contactId, string $phone): bool
+    {
+        $sql = 'UPDATE accommodations SET ' .
+               'contact_id = :contact_id, ' .
+               'provider_data = JSON_SET(' .
+                   'COALESCE(provider_data, "{}"), ' .
+                   '"$.contact_status", "found", ' .
+                   '"$.contact_phone", :phone, ' .
+                   '"$.contact_fetched_at", :fetched_at' .
+               '), ' .
+               'updated_at = NOW() ' .
+               'WHERE id = :id';
+
+        try {
+            $stmt = $this->pdo->prepare($sql);
+            return $stmt->execute([
+                'contact_id' => $contactId,
+                'phone' => $phone,
+                'fetched_at' => date('c'),
+                'id' => $accommodationId,
+            ]);
+        } catch (Throwable $e) {
+            Logger::error('Failed to link contact to accommodation', [
+                'accommodation_id' => $accommodationId,
+                'contact_id' => $contactId,
+                'error' => $e->getMessage(),
+            ]);
+            return false;
+        }
+    }
+
+    /**
+     * Update accommodation's provider_data status when phone could not be fetched
+     * (e.g. no phone in ad, chat only, expired/deleted ad, rate limited, error).
+     */
+    public function markAccommodationContactStatus(
+        int $accommodationId,
+        string $status,
+        ?string $error = null
+    ): bool {
+        $sql = 'UPDATE accommodations SET ' .
+               'provider_data = JSON_SET(' .
+                   'COALESCE(provider_data, "{}"), ' .
+                   '"$.contact_status", :status, ' .
+                   '"$.contact_error", :error, ' .
+                   '"$.contact_attempted_at", :attempted_at, ' .
+                   '"$.contact_attempts", COALESCE(JSON_EXTRACT(provider_data, "$.contact_attempts"), 0) + 1' .
+               '), ' .
+               'updated_at = NOW() ' .
+               'WHERE id = :id';
+
+        try {
+            $stmt = $this->pdo->prepare($sql);
+            return $stmt->execute([
+                'status' => $status,
+                'error' => $error,
+                'attempted_at' => date('c'),
+                'id' => $accommodationId,
+            ]);
+        } catch (Throwable $e) {
+            Logger::error('Failed to update accommodation contact status', [
+                'accommodation_id' => $accommodationId,
+                'status' => $status,
+                'error' => $e->getMessage(),
+            ]);
+            return false;
+        }
+    }
+
+    /**
+     * Reset contact status of accommodations previously marked as failed or no_phone,
+     * so they can be re-evaluated.
+     */
+    public function resetFailedContactStatuses(?string $city = null): int
+    {
+        $sql = 'UPDATE accommodations SET ' .
+               'provider_data = JSON_SET(' .
+                   'COALESCE(provider_data, "{}"), ' .
+                   '"$.contact_status", "retry", ' .
+                   '"$.contact_attempts", 0' .
+               ') ' .
+               'WHERE provider = ? ' .
+               'AND contact_id IS NULL ';
+
+        $params = [DivarAdMapper::PROVIDER];
+
+        if ($city !== null && $city !== '') {
+            $sql .= 'AND (city = ? OR province = ?) ';
+            $params[] = $city;
+            $params[] = $city;
+        }
+
+        try {
+            $stmt = $this->pdo->prepare($sql);
+            $stmt->execute($params);
+            return $stmt->rowCount();
+        } catch (Throwable $e) {
+            Logger::error('Failed to reset failed contact statuses', ['error' => $e->getMessage()]);
+            return 0;
+        }
+    }
 }

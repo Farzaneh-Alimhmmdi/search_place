@@ -103,3 +103,20 @@
 - Phone numbers are NOT collected here; that is a later step which writes into
   `contacts` and links `accommodations.contact_id`
 - Progress, counters and errors are reported to the user in Persian
+
+### 14. Divar Phone Number Updater (Cron Job)
+- Operates independently from the Divar collection page (`/divar_collect`)
+- Targets accommodation rows where `provider = 'divar'` and `contact_id IS NULL`
+- Strictly respects Divar request limitations:
+  - Enforces a configurable request delay with randomized jitter (e.g., 3000ms + 500-1500ms) between API requests to avoid bot detection
+  - Processes records in manageable batches (default 20 records per run)
+  - Implements a daily request quota to protect Divar accounts from quota depletion and bans
+  - Handles HTTP 429 (Too Many Requests) by applying exponential backoff/cooldown (persisted in state) and immediately pausing execution
+  - Detects expired authentication (HTTP 401/403) and stops immediately with clear logging to avoid spamming
+  - Halts execution early if consecutive network or server errors exceed the configured threshold
+- Concurrency control: uses a non-blocking process file lock (`flock`) to prevent overlapping cron runs
+- Normalized phone numbers are deduplicated and saved into the `contacts` table (unique by `phone`)
+- Links `accommodations.contact_id` to the corresponding contact
+- Updates `accommodations.provider_data` with status metadata (`found`, `no_phone`, `expired`, `error`) so unresolvable records are not repeatedly queried in infinite loops
+- Reports progress and errors in Persian and logs to `storage/logs/`
+

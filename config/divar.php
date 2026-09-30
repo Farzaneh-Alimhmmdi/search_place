@@ -56,6 +56,58 @@ return [
         'log_tail' => 8,
     ],
 
+    /*
+     * ---------------------------------------------------------------
+     * Phone updater cronjob settings
+     * ---------------------------------------------------------------
+     *
+     * Divar limitations:
+     *  - Divar aggressively rate limits phone number reveal requests.
+     *  - If requests are sent too fast, Divar returns HTTP 429 or blocks the IP.
+     *  - Daily limit: Divar allows a limited number of contact reveals per day
+     *    per account (typically 50-100).
+     *  - Auth requirement: Divar requires active session cookies
+     *    (sAccessToken, sFrontToken, did, cdid).
+     */
+    'phone_updater' => [
+        // Number of ads without phone to process in one cron execution
+        'batch_size' => 20,
+
+        // Base delay between consecutive Divar requests in milliseconds (3000ms = 3s)
+        'request_delay_ms' => 3000,
+
+        // Random jitter added to delay (in ms) to avoid predictable bot patterns
+        'jitter_min_ms' => 500,
+        'jitter_max_ms' => 1500,
+
+        // Maximum requests allowed in a 24-hour period (daily safety quota)
+        'max_daily_requests' => 100,
+
+        // Maximum consecutive errors before terminating the run early
+        'max_consecutive_errors' => 3,
+
+        // Cooldown period on HTTP 429 Too Many Requests (in seconds, 1800s = 30min)
+        'rate_limit_cooldown_seconds' => 1800,
+
+        // File where lock is held so multiple cron runs do not overlap
+        'lock_file' => 'storage/phone_updater.lock',
+
+        // File where cookies are stored for CLI/cron environment
+        'cookie_file' => 'storage/divar_cookies.json',
+
+        // State file to track daily request counts and rate limits
+        'state_file' => 'storage/phone_updater_state.json',
+
+        // Log file path for phone updater
+        'log_file' => 'storage/logs/phone_updater.log',
+
+        // Max retry attempts per ad before marking it permanently failed
+        'max_attempts' => 3,
+
+        // Divar contact API endpoint
+        'contact_endpoint' => 'https://api.divar.ir/v8/postcontact/web/contact_info_v2/',
+    ],
+
     // Database config (shared)
     'db_host' => $_ENV['DB_HOST'] ?? '127.0.0.1',
     'db_port' => $_ENV['DB_PORT'] ?? 3306,

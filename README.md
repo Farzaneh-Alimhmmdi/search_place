@@ -180,3 +180,67 @@ When a user clicks the "call" button on a place result, the action is logged to 
 - Information stored includes: place ID, phone number, city, category, timestamp, IP address, and user agent
 - Database connection is configured via the `.env` file
 - All call data is sanitized before database insertion for security
+
+## Divar Phone Number Updater (`cron/update_phone_numbers.php`)
+A standalone background worker and cron job designed to fetch and update phone numbers for listings harvested from Divar.
+
+### How it Works
+1. **Independent Execution**: Completely decoupled from `/divar_collect` (the collection page). It does not paginate or search Divar.
+2. **Database Discovery**: Queries the `accommodations` table for rows where `provider = 'divar'` and `contact_id IS NULL` that have not yet been checked.
+3. **Contact Fetching**: Queries Divar's contact info endpoint (`/v8/postcontact/web/contact_info_v2/{token}`) using session cookies.
+4. **Normalized Storage**:
+   - Cleans and normalizes Iranian phone numbers (e.g. Persian numerals `۰۹...` → English `09...`).
+   - Inserts or finds the unique contact in the `contacts` table (`uq_contacts_phone`).
+   - Links `accommodations.contact_id` to `contacts.id`.
+   - Records metadata in `accommodations.provider_data` (`contact_status: found`, timestamp).
+   - If an ad has no phone (chat only, hidden, or 404 expired), records `contact_status: no_phone` or `expired` so the ad is not repeatedly checked in an endless loop.
+
+### Handling Divar Request Limitations
+Divar aggressively rate-limits contact reveal requests. The updater implements multiple safeguards:
+- **Request Delay & Jitter**: Configurable base delay (`request_delay_ms`, default 3000ms) plus randomized jitter (`jitter_min_ms` to `jitter_max_ms`, e.g. 500–1500ms) between calls to mimic human behavior and avoid automated bot detection patterns.
+- **Batch Processing**: Configurable batch limit per cron run (`batch_size`, default 20) so requests are spaced out across time.
+- **Daily Safety Quota**: Enforces a maximum daily requests limit (`max_daily_requests`, default 100) to protect Divar accounts from daily contact reveal exhaustion.
+- **HTTP 429 (Rate Limit) Backoff**: Automatically records a cooldown period (`rate_limit_cooldown_seconds`, default 30 minutes) in `storage/phone_updater_state.json` and cleanly halts execution. Subsequent cron runs will sleep/skip until the cooldown expires.
+- **HTTP 401/403 (Auth Expiry) Safeguard**: Detects session expiration, logs an alert, and terminates immediately rather than flooding Divar with failing requests.
+- **Circuit Breaker**: Stops the batch if consecutive network/server errors exceed `max_consecutive_errors` (default 3).
+- **Process Mutex (flock)**: Non-blocking lock file (`storage/phone_updater.lock`) ensures overlapping cron invocations never clash or double-request.
+
+### CLI & Cron Usage
+```bash
+# Run standard batch (20 items)
+php cron/update_phone_numbers.php
+
+# Run with custom batch size and delay
+php cron/update_phone_numbers.php --limit=30 --delay=4000
+
+# Run for a specific city
+php cron/update_phone_numbers.php --city=tehran
+
+# Dry run (test query without contacting Divar or modifying DB)
+php cron/update_phone_numbers.php --dry-run
+
+# Show current database and quota statistics
+php cron/update_phone_numbers.php --stats
+
+# Import Divar cookies
+php cron/update_phone_numbers.php --cookies="did=...; sAccessToken=...; sFrontToken=..."
+
+# Retry previously failed or no_phone listings
+php cron/update_phone_numbers.php --retry-failed
+```
+
+### Crontab Setup Example
+To run every 15 minutes in quiet mode and log to storage:
+```crontab
+*/15 * * * * cd /path/to/search_place && php cron/update_phone_numbers.php -q >> storage/logs/cron.log 2>&1
+```
+
+### Files of this feature
+- `cron/update_phone_numbers.php` - CLI / cron entrypoint
+- `bin/update_phone_numbers.php` - CLI shortcut
+- `src/Divar/DivarPhoneUpdaterService.php` - core business logic and limit management
+- `src/Divar/DivarContactFetcher.php` - Divar contact API client & phone normalizer
+- `src/Divar/DivarCookieManager.php` - cookie storage (session + persistent JSON file + env)
+- `src/Divar/AccommodationRepository.php` - DB queries, contact linking, and status tracking
+- `config/divar.php` - configuration settings under `phone_updater`
+
