@@ -186,12 +186,24 @@ final class DivarCollectController
              * CREATE TABLE IF NOT EXISTS is cheap, but there is no reason to
              * run it on every single AJAX step: once per session is enough.
              */
-            if (empty($_SESSION['divar_schema_ready'])) {
-                Schema::ensureTables();
+            /*
+             * The check is cached per session, but the cache key is the schema
+             * VERSION: after a code update (or a recreated database) the tables
+             * are verified again instead of trusting an old "it was fine".
+             */
+            if (($_SESSION['divar_schema_ready'] ?? null) !== Schema::VERSION) {
+                $changes = Schema::ensureTables();
 
-                $_SESSION['divar_schema_ready'] = true;
+                $_SESSION['divar_schema_ready'] = Schema::VERSION;
 
-                Logger::info('Divar collect: schema ensured');
+                $this->options['schema_changes'] = $changes;
+
+                if ($changes !== []) {
+                    Logger::info(
+                        'Divar collect: schema updated',
+                        ['changes' => $changes]
+                    );
+                }
             }
 
             $this->options['schema_ready'] = true;
@@ -226,6 +238,7 @@ final class DivarCollectController
             'store_raw' => (bool) ($collect['store_raw'] ?? true),
             'max_empty_pages' => $this->clamp((int) ($collect['max_empty_pages'] ?? 30), 1, 500),
             'log_tail' => $this->clamp((int) ($collect['log_tail'] ?? 8), 1, 50),
+            'schema_changes' => [],
             'db_total' => null,
             'context_rows' => null,
             'schema_ready' => false,
@@ -546,10 +559,17 @@ final class DivarCollectController
 
         if ($write['ok'] === false) {
             /*
-             * The cursor is NOT advanced, so the retry re-fetches this page and
-             * the upsert makes it safe.
+             * The cursor is NOT advanced, so a retry re-fetches this page and
+             * the upsert makes that safe.
+             *
+             * A schema problem (missing table/column) is not retryable: the
+             * browser must stop immediately and show the reason.
              */
-            $this->failStep($job, (string) $write['error']);
+            $this->failStep(
+                $job,
+                (string) $write['error'],
+                (bool) ($write['retry'] ?? true)
+            );
         }
 
         $pageNumber = (int) ($job['steps'] ?? 0) + 1;
@@ -783,7 +803,12 @@ final class DivarCollectController
         $this->json([
             'success' => false,
             'retry' => $retry,
-            'error' => Str::limit($message, 400),
+            /*
+             * `fatal` makes the browser show the red error box instead of only
+             * writing a line into the log.
+             */
+            'fatal' => !$retry,
+            'error' => Str::limit($message, 600),
             'job' => HarvestJobStore::publicView($job),
         ]);
     }

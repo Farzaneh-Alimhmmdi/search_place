@@ -45,6 +45,21 @@ final class AccommodationRepository
         'raw_data',
     ];
 
+    /**
+     * MySQL error numbers that mean "the table/column is not there".
+     *
+     * 1054 unknown column, 1146 table does not exist, 1091 unknown column in
+     * a clause, 1072 key column does not exist.
+     */
+    private const SCHEMA_ERROR_CODES = [1054, 1146, 1091, 1072];
+
+    private const SCHEMA_ERROR_STATES = ['42S22', '42S02'];
+
+    private const SCHEMA_HINT =
+        ' — ساختار جدول با database/schema.sql یکی نیست. صفحه را یک بار دیگر ' .
+        'بارگذاری کنید تا ستون/کلید جامانده خودکار اضافه شود، یا schema.sql را ' .
+        'دستی روی دیتابیس اجرا کنید.';
+
     private PDO $pdo;
 
     private ?PDOStatement $upsertStatement = null;
@@ -72,6 +87,7 @@ final class AccommodationRepository
     {
         $result = [
             'ok' => true,
+            'retry' => true,
             'error' => null,
             'inserted' => 0,
             'updated' => 0,
@@ -88,7 +104,9 @@ final class AccommodationRepository
             $statement = $this->upsertStatement();
         } catch (Throwable $e) {
             $result['ok'] = false;
-            $result['error'] = 'آماده‌سازی کوئری ذخیره‌سازی ناموفق بود: ' . $e->getMessage();
+            $result['retry'] = !$this->isSchemaError($e);
+            $result['error'] = 'آماده‌سازی کوئری ذخیره‌سازی ناموفق بود: ' . $e->getMessage() .
+                ($this->isSchemaError($e) ? self::SCHEMA_HINT : '');
 
             return $result;
         }
@@ -149,7 +167,9 @@ final class AccommodationRepository
             }
 
             $result['ok'] = false;
-            $result['error'] = 'ذخیره‌سازی در دیتابیس ناموفق بود: ' . $e->getMessage();
+            $result['retry'] = !$this->isSchemaError($e);
+            $result['error'] = 'ذخیره‌سازی در دیتابیس ناموفق بود: ' . $e->getMessage() .
+                ($this->isSchemaError($e) ? self::SCHEMA_HINT : '');
 
             Logger::error(
                 'Accommodation batch failed',
@@ -231,6 +251,23 @@ final class AccommodationRepository
 
             return 0;
         }
+    }
+
+    /**
+     * Is this error caused by a wrong/incomplete table structure?
+     *
+     * Such an error never fixes itself, so the harvest must stop instead of
+     * retrying the same step forever.
+     */
+    private function isSchemaError(Throwable $e): bool
+    {
+        $errno = (int) ($e->errorInfo[1] ?? 0);
+
+        if (in_array($errno, self::SCHEMA_ERROR_CODES, true)) {
+            return true;
+        }
+
+        return in_array(strtoupper((string) $e->getCode()), self::SCHEMA_ERROR_STATES, true);
     }
 
     /**
