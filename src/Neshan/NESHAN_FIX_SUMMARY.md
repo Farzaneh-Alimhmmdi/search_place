@@ -22,6 +22,10 @@ page exists.
 - The pagination indicator is based on the real presence of a look-ahead result.
   Neshan does not publish an exact total, so the interface does not label the
   current page size as the total result count.
+- Phone numbers are normalized from visible card text and `tel:` links. If the
+  card does not include a number, the scraper checks the corresponding Neshan
+  detail page's contact controls and caches the result. A phone is shown only
+  when Neshan provides one; missing numbers remain blank.
 - PHP starts Python with an argument array (not nested shell quoting), captures
   errors, and enforces a process timeout. Empty/broken responses no longer look
   like successful searches.
@@ -52,8 +56,8 @@ this project does not bypass that limit.
 
 ## Tests
 
-Run the scraper's parsing, relevance-filtering, and pagination tests without a
-browser or network connection:
+Run the scraper's phone extraction, parsing, relevance-filtering, and
+pagination tests without a browser or network connection:
 
 ```bash
 python -m unittest discover -s tests -v

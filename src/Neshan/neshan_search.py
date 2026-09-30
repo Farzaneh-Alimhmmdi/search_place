@@ -129,7 +129,9 @@ ADDRESS_MARKERS = (
     "خیابان", "میدان", "کوچه", "بلوار", "محله", "پلاک", "منطقه", "جاده",
     "بزرگراه", "طبقه", "ساختمان", "مجتمع", "شهرک", "استان",
 )
-PHONE_PATTERN = re.compile(r"(?<!\d)(?:\+?98|0)\d{9,10}(?!\d)")
+PHONE_PATTERN = re.compile(
+    r"(?<!\d)(?:0098|\+?98|0)(?:[\s().\-]*\d){9,10}(?!\d)"
+)
 
 PERSIAN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
 PERSIAN_TEXT = str.maketrans({"ي": "ی", "ى": "ی", "ك": "ک", "ـ": "", "\u200c": " "})
@@ -187,6 +189,20 @@ def normalize_text(value: Any) -> str:
     """Normalize Persian/Arabic text and digits for comparisons."""
     text = str(value or "").translate(PERSIAN_TEXT).translate(PERSIAN_DIGITS).lower()
     return re.sub(r"\s+", " ", text).strip()
+
+
+def extract_iranian_phone(value: Any) -> Optional[str]:
+    """Extract and normalize a complete Iranian phone number from text."""
+    text = normalize_text(value).replace("\u200e", "").replace("\u200f", "")
+    for match in PHONE_PATTERN.finditer(text):
+        digits = re.sub(r"\D", "", match.group(0))
+        if digits.startswith("0098"):
+            digits = "0" + digits[4:]
+        elif digits.startswith("98"):
+            digits = "0" + digits[2:]
+        if len(digits) == 11 and digits.startswith("0"):
+            return digits
+    return None
 
 
 def _has_any(text: str, terms: tuple[str, ...] | list[str]) -> bool:
@@ -305,9 +321,12 @@ def parse_place_record(record: dict[str, Any], category: Category) -> Optional[P
         None,
     )
 
-    normalized_card = normalize_text(" ".join(card_lines))
-    phone_match = PHONE_PATTERN.search(normalized_card)
-    phone = phone_match.group(0) if phone_match else None
+    phone = extract_iranian_phone(" ".join(card_lines))
+    if phone is None:
+        for phone_source in record.get("phone_sources", []) or []:
+            phone = extract_iranian_phone(phone_source)
+            if phone:
+                break
 
     rating: Optional[float] = None
     for index, line in enumerate(card_lines):
@@ -384,6 +403,8 @@ class NeshanSearcher:
     DEFAULT_CACHE_TTL = 600
     MAX_SCROLL_STEPS = 60
     STABLE_SCROLLS_TO_FINISH = 3
+    MAX_PHONE_DETAIL_PAGES = 20
+    MAX_PHONE_ENRICHMENT_SECONDS = 45
 
     def __init__(
         self,
@@ -396,6 +417,167 @@ class NeshanSearcher:
         self.slow_mo = max(0, slow_mo)
         self.cache_ttl = max(0, cache_ttl)
         self.max_scroll_steps = max(1, max_scroll_steps)
+
+    def _launch_browser(self, playwright: Any) -> tuple[Any, Any]:
+        launch_options: dict[str, Any] = {
+            "headless": self.headless,
+            "slow_mo": self.slow_mo,
+            "args": [
+                "--disable-blink-features=AutomationControlled",
+                "--disable-dev-shm-usage",
+                "--no-sandbox",
+                "--disable-gpu",
+            ],
+        }
+        # Reuse the user's installed Chrome/Chromium (including the default
+        # Windows Chrome path used by the original script). Only fall back to
+        # Playwright's downloaded browser when none exists.
+        chrome_path = find_system_browser()
+        if chrome_path:
+            print(f"Using installed browser: {chrome_path}", file=sys.stderr)
+            launch_options["executable_path"] = chrome_path
+        else:
+            print("No installed Chrome/Chromium found; using Playwright's bundled browser.", file=sys.stderr)
+
+        browser = playwright.chromium.launch(**launch_options)
+        try:
+            context = browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                ),
+                viewport={"width": 1440, "height": 1000},
+                locale="fa-IR",
+                timezone_id="Asia/Tehran",
+            )
+        except Exception:
+            browser.close()
+            raise
+        return browser, context
+
+    @staticmethod
+    def _extract_phone_from_detail(page_object: Any) -> Optional[str]:
+        """Read a phone number from Neshan's contact controls or detail text."""
+        try:
+            details = page_object.evaluate(
+                """() => {
+                    const contactValues = [];
+                    const selector = 'a[href^="tel:"], [href^="tel:"], button.wE_mwzL, [data-phone], [data-telephone]';
+                    for (const element of document.querySelectorAll(selector)) {
+                        contactValues.push(
+                            element.getAttribute('href') || '',
+                            element.getAttribute('data-phone') || '',
+                            element.getAttribute('data-telephone') || '',
+                            element.getAttribute('aria-label') || '',
+                            element.getAttribute('title') || '',
+                            element.innerText || element.textContent || ''
+                        );
+                    }
+                    return {
+                        contact_values: contactValues,
+                        body_text: document.body ? document.body.innerText || '' : ''
+                    };
+                }"""
+            )
+        except Exception:
+            return None
+
+        if isinstance(details, dict):
+            for value in details.get("contact_values", []) or []:
+                phone = extract_iranian_phone(value)
+                if phone:
+                    return phone
+            return extract_iranian_phone(details.get("body_text", ""))
+        return extract_iranian_phone(details)
+
+    def _enrich_missing_phones(self, browser_context: Any, places: list[dict[str, Any]]) -> None:
+        """Visit visible result details and add any listed contact phone numbers."""
+        candidates = [
+            place for place in places
+            if not place.get("phone")
+            and not place.get("phone_checked")
+            and place.get("neshan_url")
+        ][: self.MAX_PHONE_DETAIL_PAGES]
+        if not candidates:
+            return
+
+        try:
+            detail_page = browser_context.new_page()
+        except Exception as error:
+            print(f"Could not open Neshan place details for phone numbers: {error}", file=sys.stderr)
+            return
+
+        deadline = time.monotonic() + self.MAX_PHONE_ENRICHMENT_SECONDS
+        try:
+            for place in candidates:
+                if time.monotonic() >= deadline:
+                    print("Stopped phone-detail checks at the per-request time limit.", file=sys.stderr)
+                    break
+                try:
+                    response = detail_page.goto(
+                        str(place["neshan_url"]),
+                        wait_until="domcontentloaded",
+                        timeout=10000,
+                    )
+                    if response is not None and response.status == 429:
+                        print("Neshan rate-limited phone detail requests (HTTP 429).", file=sys.stderr)
+                        break
+                    if response is not None and response.status >= 400:
+                        place["phone_checked"] = True
+                        continue
+
+                    try:
+                        detail_page.wait_for_function(
+                            "document.querySelector('h1') !== null || "
+                            "Array.from(document.querySelectorAll('a')).some(a => a.href.startsWith('tel:')) || "
+                            "document.querySelector('.wE_mwzL, [data-phone]') !== null",
+                            timeout=1800,
+                        )
+                    except Exception:
+                        # Some details are rendered without a heading or a
+                        # dedicated contact control; still inspect their text.
+                        pass
+
+                    phone = self._extract_phone_from_detail(detail_page)
+                    if phone:
+                        place["phone"] = phone
+                    place["phone_checked"] = True
+                    detail_page.wait_for_timeout(180)
+                except Exception as error:
+                    message = str(error).strip()
+                    print(
+                        f"Could not read phone for Neshan place {place.get('place_id', '')}: "
+                        f"{message or error.__class__.__name__}",
+                        file=sys.stderr,
+                    )
+                    # Do not mark a timed-out detail page as checked; a later
+                    # cached request can retry it without affecting search data.
+        finally:
+            try:
+                detail_page.close()
+            except Exception:
+                pass
+
+    def _enrich_cached_page_phones(self, places: list[dict[str, Any]]) -> None:
+        if not any(
+            not place.get("phone") and not place.get("phone_checked") and place.get("neshan_url")
+            for place in places
+        ):
+            return
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            return
+
+        try:
+            with sync_playwright() as playwright:
+                browser, browser_context = self._launch_browser(playwright)
+                try:
+                    self._enrich_missing_phones(browser_context, places)
+                finally:
+                    browser.close()
+        except Exception as error:
+            print(f"Could not enrich cached Neshan phones: {error}", file=sys.stderr)
 
     @staticmethod
     def _cache_path(city: str, category: Category) -> Path:
@@ -477,6 +659,13 @@ class NeshanSearcher:
         # Chromium. A completed cache can also serve the final page exactly.
         cache_is_enough = cached_complete or len(cached_results) >= page_end
         if cache_is_enough:
+            cached_page = cached_results[page_start:page_end]
+            if any(
+                not place.get("phone") and not place.get("phone_checked") and place.get("neshan_url")
+                for place in cached_page
+            ):
+                self._enrich_cached_page_phones(cached_page)
+                self._write_cache(city, category, cached_results, cached_complete)
             return self._page_response(cached_results, page, page_size, cached_complete)
 
         try:
@@ -496,37 +685,8 @@ class NeshanSearcher:
 
         try:
             with sync_playwright() as playwright:
-                launch_options: dict[str, Any] = {
-                    "headless": self.headless,
-                    "slow_mo": self.slow_mo,
-                    "args": [
-                        "--disable-blink-features=AutomationControlled",
-                        "--disable-dev-shm-usage",
-                        "--no-sandbox",
-                        "--disable-gpu",
-                    ],
-                }
-                # Reuse the user's installed Chrome/Chromium (including the
-                # default Windows Chrome path used by the original script). Only
-                # fall back to Playwright's downloaded browser when none exists.
-                chrome_path = find_system_browser()
-                if chrome_path:
-                    print(f"Using installed browser: {chrome_path}", file=sys.stderr)
-                    launch_options["executable_path"] = chrome_path
-                else:
-                    print("No installed Chrome/Chromium found; using Playwright's bundled browser.", file=sys.stderr)
-
-                browser = playwright.chromium.launch(**launch_options)
+                browser, browser_context = self._launch_browser(playwright)
                 try:
-                    browser_context = browser.new_context(
-                        user_agent=(
-                            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                        ),
-                        viewport={"width": 1440, "height": 1000},
-                        locale="fa-IR",
-                        timezone_id="Asia/Tehran",
-                    )
                     page_object = browser_context.new_page()
                     page_object.add_init_script(
                         """
@@ -617,6 +777,9 @@ class NeshanSearcher:
                                 scrape_complete = False
                             # Reaching the requested target is not proof that
                             # Neshan has no more results.
+                            preview_results = self._merge_results(cached_results, scraped_results)
+                            current_page = preview_results[page_start:page_end]
+                            self._enrich_missing_phones(browser_context, current_page)
                 finally:
                     browser.close()
         except Exception as error:
@@ -722,11 +885,20 @@ class NeshanSearcher:
                             const externalLinks = Array.from(card.querySelectorAll('a[href]'))
                                 .map((anchor) => anchor.href)
                                 .filter((href) => /^https?:/i.test(href) && !href.includes('/maps/places/'));
+                            const phoneSources = Array.from(card.querySelectorAll(
+                                'a[href^="tel:"], [data-phone], [data-telephone]'
+                            )).flatMap((element) => [
+                                element.getAttribute('href') || '',
+                                element.getAttribute('data-phone') || '',
+                                element.getAttribute('data-telephone') || '',
+                                cleanText(element)
+                            ]).filter(Boolean);
                             return {
                                 href: link.href,
                                 link_text: linkText,
                                 card_text: cleanText(card),
-                                external_links: Array.from(new Set(externalLinks))
+                                external_links: Array.from(new Set(externalLinks)),
+                                phone_sources: Array.from(new Set(phoneSources))
                             };
                         });
                 }"""

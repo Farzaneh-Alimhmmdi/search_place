@@ -67,8 +67,11 @@ inventing a total.
 
 The first page preloads one page ahead and the server briefly caches results
 for subsequent requests. The cache is temporary (10 minutes) and lives outside
-the repository. If Neshan returns HTTP 429, the search page reports that the
-provider is rate-limiting requests and asks the user to retry later.
+the repository. Phone numbers are parsed from visible cards and contact links;
+when a result card has no number, the scraper checks that place's Neshan detail
+page and reads its contact control. Only numbers Neshan actually lists are
+shown. If Neshan returns HTTP 429, the search page reports that the provider is
+rate-limiting requests and asks the user to retry later.
 
 Install the Python dependency on the server:
 

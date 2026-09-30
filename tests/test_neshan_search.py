@@ -9,6 +9,7 @@ from src.Neshan.neshan_search import (
     NeshanSearcher,
     detect_place_kind,
     find_system_browser,
+    extract_iranian_phone,
     is_relevant_record,
     normalize_text,
     paginate_results,
@@ -43,6 +44,67 @@ class NeshanSearchHelpersTest(unittest.TestCase):
     def test_normalizes_persian_letters_digits_and_joiners(self):
         self.assertEqual(normalize_text("هتل‌ در تهران ۱۲۳"), "هتل در تهران 123")
         self.assertEqual(normalize_text("كافه ياس"), "کافه یاس")
+
+    def test_extracts_formatted_local_and_international_iranian_phone_numbers(self):
+        self.assertEqual(extract_iranian_phone("تماس: ۰۲۱-۱۲۳۴ ۵۶۷۸"), "02112345678")
+        self.assertEqual(extract_iranian_phone("+98 (912) 345-6789"), "09123456789")
+        self.assertEqual(extract_iranian_phone("0098 21 1234 5678"), "02112345678")
+        self.assertIsNone(extract_iranian_phone("شماره‌ای درج نشده است"))
+
+    def test_extracts_phone_from_detail_contact_controls(self):
+        class DetailPage:
+            @staticmethod
+            def evaluate(_script):
+                return {
+                    "contact_values": ["تماس با ما: ۰۲۱-۱۲۳۴ ۵۶۷۸"],
+                    "body_text": "شماره دیگری 09120000000",
+                }
+
+        self.assertEqual(
+            NeshanSearcher._extract_phone_from_detail(DetailPage()),
+            "02112345678",
+        )
+
+    def test_enriches_a_result_from_its_neshan_detail_page(self):
+        class Response:
+            status = 200
+
+        class DetailPage:
+            def goto(self, url, **_kwargs):
+                self.url = url
+                return Response()
+
+            @staticmethod
+            def wait_for_function(_script, **_kwargs):
+                return None
+
+            @staticmethod
+            def evaluate(_script):
+                return {
+                    "contact_values": ["شماره تماس: ۰۹۱۲-۳۴۵-۶۷۸۹"],
+                    "body_text": "",
+                }
+
+            @staticmethod
+            def wait_for_timeout(_milliseconds):
+                return None
+
+            @staticmethod
+            def close():
+                return None
+
+        class BrowserContext:
+            @staticmethod
+            def new_page():
+                return DetailPage()
+
+        place = {
+            "place_id": "abc123",
+            "neshan_url": "https://neshan.org/maps/places/abc123",
+        }
+        NeshanSearcher()._enrich_missing_phones(BrowserContext(), [place])
+        self.assertEqual(place["phone"], "09123456789")
+        self.assertTrue(place["phone_checked"])
 
     def test_filters_a_medical_result_from_a_hotel_search(self):
         hotel = Category("hotel", "هتل")
@@ -116,6 +178,21 @@ class NeshanSearchHelpersTest(unittest.TestCase):
         self.assertEqual(place.phone, "02112345678")
         self.assertEqual(place.rating, 5.0)
         self.assertEqual(place.website, "https://example.com")
+
+        # Search cards may contain a tel link even when the number is absent
+        # from their visible text.
+        linked_phone_place = parse_place_record(
+            {
+                "href": "https://neshan.org/maps/places/phone-link",
+                "link_text": "هتل آفتاب",
+                "card_text": "هتل آفتاب",
+                "phone_sources": ["tel:+98 912 345 6789"],
+            },
+            hotel,
+        )
+        self.assertIsNotNone(linked_phone_place)
+        assert linked_phone_place is not None
+        self.assertEqual(linked_phone_place.phone, "09123456789")
 
         # A name containing the search term is not itself a displayed type.
         sparse_place = parse_place_record(
