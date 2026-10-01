@@ -4,6 +4,7 @@ require __DIR__ . '/bootstrap.php';
 
 use Src\Divar\AccommodationRepository;
 use Src\Divar\DivarAdMapper;
+use Src\Divar\DivarPhoneParser;
 use Src\Divar\DivarSearchAdStore;
 
 $failures = 0;
@@ -121,6 +122,60 @@ $tests['contact, listing and commit failures roll back instead of partially savi
             expectSame(false, $pdo->inTransaction(), 'No open transaction after failure');
         }
     }
+};
+
+$tests['phone parser accepts payload, hamza-free title and nested widgets'] = static function (): void {
+    expectSame('09123456789', DivarPhoneParser::parse([
+        'widget_list' => [[
+            'widget_type' => 'UNEXPANDABLE_ROW',
+            'data' => ['title' => 'شمارهٔ موبایل', 'value' => '09123456789'],
+        ]],
+    ]), 'Original title+value shape');
+    expectSame('09123456789', DivarPhoneParser::parse([
+        'widget_list' => [[
+            'widget_type' => 'UNEXPANDABLE_ROW',
+            'data' => [
+                'title' => 'شماره موبایل',
+                'action' => ['payload' => ['phone_number' => '۰۹۱۲۳۴۵۶۷۸۹']],
+            ],
+        ]],
+    ]), 'Payload phone with Persian digits');
+    expectSame('09123456789', DivarPhoneParser::parse([
+        'page' => ['widget_list' => [[
+            'widget_type' => 'UNEXPANDABLE_ROW',
+            'data' => ['title' => 'تلفن', 'value' => '+98 912 345 6789'],
+        ]]],
+    ]), 'Nested widget list');
+    expectSame(null, DivarPhoneParser::parse(['widget_list' => []]), 'Empty widgets');
+};
+
+$tests['stored phone lookup uses the unique listing key and skips empty ids'] = static function (): void {
+    $pdo = new RecordingPDO();
+    $pdo->queryResult = [['phone' => '09123456789']];
+    $repository = new AccommodationRepository($pdo);
+    expectSame('09123456789', $repository->findStoredPhone('divar', 'test-token'), 'Stored phone');
+    expectSame(['divar', 'test-token'], $pdo->executions[0]['params'], 'Provider and token');
+    expectSame(true, str_contains($pdo->executions[0]['sql'], 'uq_provider_external_id')
+        || str_contains($pdo->executions[0]['sql'], 'a.provider = ? AND a.external_id = ?'),
+        'Lookup by unique listing key');
+    expectSame(null, $repository->findStoredPhone('divar', ''), 'Empty id');
+    expectSame(1, count($pdo->executions), 'Invalid ids do not hit the database');
+};
+
+$tests['page hydration returns stored phones without writing'] = static function (): void {
+    $pdo = new RecordingPDO();
+    $pdo->queryResult = [
+        ['external_id' => 'test-token', 'phone' => '09123456789'],
+        ['external_id' => 'other-token', 'phone' => null],
+    ];
+    $stored = (new AccommodationRepository($pdo))->findStoredByExternalIds(
+        'divar',
+        ['test-token', '', 'other-token', 'test-token']
+    );
+    expectSame(['phone' => '09123456789'], $stored['test-token'], 'Phone for a saved ad');
+    expectSame(['phone' => null], $stored['other-token'], 'Saved ad without a contact');
+    expectSame(['divar', 'test-token', 'other-token'], $pdo->executions[0]['params'], 'Deduped IN list');
+    expectSame([], $pdo->events, 'Lookup is not a write');
 };
 
 $tests['collector reruns still preserve contacts, coordinates and prices'] = static function () use ($row): void {

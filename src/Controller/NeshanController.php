@@ -26,7 +26,6 @@ final class NeshanController
     private string $selectedCategory = 'guest-house';
     private ?array $results = null;
     private ?string $error = null;
-    private array $existingCallLogs = [];
     private int $currentPage = 1;
     private ?string $saveResultSetKey = null;
     private array $savedPlaceIds = [];
@@ -74,23 +73,20 @@ final class NeshanController
         $this->currentPage = max(1, (int)($_POST['page'] ?? 1));
         $this->results = null;
         $this->error = null;
-        $this->existingCallLogs = [];
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (($_POST['action'] ?? '') === 'save_place') {
                 SelectedPlaceAction::handle('neshan');
             }
 
-            // Handle call logging (AJAX)
-            if (isset($_POST['action']) && $_POST['action'] === 'call' && isset($_POST['place_id'])) {
-                $this->logCall(
-                    $_POST['place_id'] ?? '',
-                    $_POST['phone'] ?? '',
-                    $_POST['city'] ?? $this->selectedCity ?? '',
-                    $_POST['category'] ?? $this->selectedCategory ?? '',
-                    $_POST['description'] ?? ''
-                );
-                return; // Exit early for AJAX call
+            if (isset($_POST['action']) && $_POST['action'] === 'call') {
+                header('Content-Type: application/json; charset=utf-8');
+                http_response_code(410);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'ثبت تماس غیرفعال است. ذخیره اقامتگاه کافی است.',
+                ], JSON_UNESCAPED_UNICODE);
+                exit;
             }
 
             if ($this->selectedCity) {
@@ -118,7 +114,6 @@ final class NeshanController
                     // Cache the displayed page for explicit selected saves and mark persisted rows.
                     if ($this->results && !empty($this->results['places'])) {
                         $this->prepareSaveState($citySlug);
-                        $this->loadExistingCallLogs();
                     }
                 } catch (\Exception $e) {
                     Logger::error('Neshan Search failed', ['error' => $e->getMessage()]);
@@ -151,64 +146,6 @@ final class NeshanController
         }
     }
 
-    private function loadExistingCallLogs(): void
-    {
-        $placeIds = [];
-        foreach ($this->results['places'] as $place) {
-            $id = $place['id'] ?? $place['token'] ?? $place['place_id'] ?? null;
-            if ($id) {
-                $placeIds[] = $id;
-            }
-        }
-
-        if (empty($placeIds)) return;
-
-        $placeholders = implode(',', array_fill(0, count($placeIds), '?'));
-        $query = "SELECT place_id, phone_number, status FROM call_logs WHERE place_id IN ($placeholders)";
-        $stmt = Db::getConnection()->prepare($query);
-        $stmt->execute($placeIds);
-        $logs = $stmt->fetchAll(\PDO::FETCH_ASSOC);
-
-        // Create a lookup map: place_id -> phone_number -> status
-        $this->existingCallLogs = [];
-        foreach ($logs as $log) {
-            $this->existingCallLogs[$log['place_id']][$log['phone_number']] = $log['status'];
-        }
-    }
-
-    private function logCall(string $placeId, string $phone, string $city, string $category, string $description = ''): void
-    {
-        $ipAddress = $_SERVER['REMOTE_ADDR'] ?? '';
-        $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? '';
-
-        // Check if already exists
-        $checkQuery = "SELECT id, status FROM call_logs WHERE place_id = ? AND phone_number = ?";
-        $checkStmt = Db::getConnection()->prepare($checkQuery);
-        $checkStmt->execute([$placeId, $phone]);
-        $existing = $checkStmt->fetch();
-
-        if ($existing) {
-            // Already exists
-            header('Content-Type: application/json');
-            echo json_encode([
-                'success' => true, 
-                'message' => 'Call already logged',
-                'already_exists' => true,
-                'status' => $existing['status']
-            ]);
-            exit;
-        }
-
-        $query = "INSERT INTO call_logs (place_id, phone_number, city, category, description, status, ip_address, user_agent) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)";
-        $stmt = Db::getConnection()->prepare($query);
-        $stmt->execute([$placeId, $phone, $city, $category, $description, $ipAddress, $userAgent]);
-
-        // Return JSON response for AJAX
-        header('Content-Type: application/json');
-        echo json_encode(['success' => true, 'message' => 'Call logged successfully']);
-        exit;
-    }
-
     private function render(): void
     {
         $view = new SearchView(
@@ -230,8 +167,6 @@ final class NeshanController
             $this->saveResultSetKey,
             $this->savedPlaceIds
         );
-        // Pass existing call logs to view
-        $view->setExistingCallLogs($this->existingCallLogs);
         $view->render();
     }
 }

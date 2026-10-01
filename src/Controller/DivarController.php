@@ -5,10 +5,12 @@ namespace Src\Controller;
 use Src\Support\Config;
 use Src\Support\Db;
 use Src\Support\Logger;
+use Src\Support\ProviderAccommodationMapper;
 use Src\Support\Schema;
 use Src\Support\SelectedPlaceService;
 use Src\Http\CurlHttpClient;
 use Src\Divar\AccommodationRepository;
+use Src\Divar\DivarPhoneParser;
 use Src\Divar\DivarSearchAdStore;
 use Src\Divar\DivarClient;
 use Src\Divar\DivarSearchService;
@@ -36,7 +38,6 @@ final class DivarController
     private string $selectedQuery = '';
     private ?array $results = null;
     private ?string $error = null;
-    private array $existingCallLogs = [];
     private ?string $saveResultSetKey = null;
     private array $savedPlaceIds = [];
 
@@ -628,23 +629,20 @@ final class DivarController
         $this->selectedQuery = $_POST['query'] ?? '';
         $this->results = null;
         $this->error = null;
-        $this->existingCallLogs = [];
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (($_POST['action'] ?? '') === 'save_place') {
                 SelectedPlaceAction::handle('divar');
             }
 
-            // Handle call logging (AJAX)
-            if (isset($_POST['action']) && $_POST['action'] === 'call' && isset($_POST['place_id'])) {
-                $this->logCall(
-                    $_POST['place_id'] ?? '',
-                    $_POST['phone'] ?? '',
-                    $_POST['city'] ?? $this->selectedCity ?? '',
-                    $_POST['category'] ?? $this->selectedCategory ?? '',
-                    $_POST['description'] ?? ''
-                );
-                exit; // logCall() already exits internally; kept for safety
+            if (isset($_POST['action']) && $_POST['action'] === 'call') {
+                header('Content-Type: application/json; charset=utf-8');
+                http_response_code(410);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'ثبت تماس برای نتایج دیوار غیرفعال است. ذخیره شماره تماس کافی است.',
+                ], JSON_UNESCAPED_UNICODE);
+                exit;
             }
             if (
                 isset($_POST['action']) &&
@@ -1044,7 +1042,6 @@ final class DivarController
                                 !empty($this->results['places'])
                             ) {
                                 $this->prepareSaveState($citySlug, $requestedPage);
-                                $this->loadExistingCallLogs();
                             }
 
                         } catch (\Exception $e) {
@@ -1212,70 +1209,63 @@ final class DivarController
         $this->saveResultSetKey = SelectedPlaceService::remember('divar', $places, $context);
 
         try {
-            $this->savedPlaceIds = SelectedPlaceService::savedIds('divar', $places);
+            $this->hydrateStoredDivarResults($places);
         } catch (\Throwable $e) {
-            Logger::warning('Could not check saved Divar places', [
+            $this->logPhoneIssue('WARNING', 'Could not check saved Divar places', [
                 'error' => $e->getMessage(),
             ]);
         }
     }
 
-    private function loadExistingCallLogs(): void
+    /**
+     * Mark listings that already exist in accommodations and copy any stored
+     * contact phone onto the search result so the view can show it instead of
+     * a "get phone" button.
+     *
+     * @param array<int,mixed> $places
+     */
+    private function hydrateStoredDivarResults(array $places): void
     {
-        $placeIds = [];
-        foreach ($this->results['places'] as $place) {
-            $id = $place['id'] ?? $place['token'] ?? $place['place_id'] ?? null;
-            if ($id) {
-                $placeIds[] = $id;
+        $ids = [];
+
+        foreach ($places as $place) {
+            if (!is_array($place)) {
+                continue;
+            }
+
+            $id = ProviderAccommodationMapper::externalId('divar', $place);
+
+            if ($id !== null) {
+                $ids[] = $id;
             }
         }
 
-        if (empty($placeIds)) return;
+        $records = (new AccommodationRepository())->findStoredByExternalIds('divar', $ids);
+        $this->savedPlaceIds = [];
 
-        $placeholders = implode(',', array_fill(0, count($placeIds), '?'));
-        $query = "SELECT place_id, phone_number, status FROM call_logs WHERE place_id IN ($placeholders)";
-        $stmt = Db::getConnection()->prepare($query);
-        $stmt->execute($placeIds);
-        $logs = $stmt->fetchAll(\PDO::FETCH_ASSOC);
-
-        // Create a lookup map: place_id -> phone_number -> status
-        $this->existingCallLogs = [];
-        foreach ($logs as $log) {
-            $this->existingCallLogs[$log['place_id']][$log['phone_number']] = $log['status'];
-        }
-    }
-
-    private function logCall(string $placeId, string $phone, string $city, string $category, string $description = ''): void
-    {
-        $ipAddress = $_SERVER['REMOTE_ADDR'] ?? '';
-        $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? '';
-
-        // Check if already exists
-        $checkQuery = "SELECT id, status FROM call_logs WHERE place_id = ? AND phone_number = ?";
-        $checkStmt = Db::getConnection()->prepare($checkQuery);
-        $checkStmt->execute([$placeId, $phone]);
-        $existing = $checkStmt->fetch();
-
-        if ($existing) {
-            // Already exists
-            header('Content-Type: application/json');
-            echo json_encode([
-                'success' => true, 
-                'message' => 'Call already logged',
-                'already_exists' => true,
-                'status' => $existing['status']
-            ]);
-            exit;
+        if ($records === [] || !is_array($this->results['places'] ?? null)) {
+            return;
         }
 
-        $query = "INSERT INTO call_logs (place_id, phone_number, city, category, description, status, ip_address, user_agent) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)";
-        $stmt = Db::getConnection()->prepare($query);
-        $stmt->execute([$placeId, $phone, $city, $category, $description, $ipAddress, $userAgent]);
+        foreach ($this->results['places'] as $index => $place) {
+            if (!is_array($place)) {
+                continue;
+            }
 
-        // Return JSON response for AJAX
-        header('Content-Type: application/json');
-        echo json_encode(['success' => true, 'message' => 'Call logged successfully']);
-        exit;
+            $id = ProviderAccommodationMapper::externalId('divar', $place);
+
+            if ($id === null || !isset($records[$id])) {
+                continue;
+            }
+
+            $this->savedPlaceIds[$id] = true;
+            $phone = $records[$id]['phone'] ?? null;
+
+            if (is_string($phone) && $phone !== '') {
+                $this->results['places'][$index]['telephone'] = $phone;
+                $this->results['places'][$index]['phone'] = $phone;
+            }
+        }
     }
 
     private function getCitiesForProvince(string $provinceName): array
@@ -1307,6 +1297,40 @@ final class DivarController
             bin2hex(substr($data, 10, 6))
         );
     }
+    private function logPhoneIssue(string $level, string $message, array $context = []): void
+    {
+        Logger::issue('divar_phone', $level, $message, $context);
+    }
+
+    /**
+     * True when Divar rejected the stored session and the user must log in
+     * again with their phone number (OTP), not when a captcha blocked us.
+     */
+    private function isExpiredDivarSession(int $httpCode, mixed $response): bool
+    {
+        if ($httpCode === 401) {
+            return true;
+        }
+
+        $body = is_string($response) ? $response : '';
+
+        return preg_match('/jwt|expired|unauthorized|unauthenticated/i', $body) === 1;
+    }
+
+    private function lookupStoredDivarPhone(string $placeId): ?string
+    {
+        try {
+            return (new AccommodationRepository())->findStoredPhone('divar', $placeId);
+        } catch (\Throwable $e) {
+            $this->logPhoneIssue('WARNING', 'Could not look up stored Divar phone', [
+                'place_id' => $placeId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
+    }
+
     private function getPhoneNumberAction(): void
     {
         header('Content-Type: application/json; charset=utf-8');
@@ -1315,7 +1339,12 @@ final class DivarController
             ? trim($_POST['place_id'])
             : '';
 
+        $this->logPhoneIssue('INFO', 'get_phone started', [
+            'place_id' => $placeId === '' ? null : $placeId,
+        ]);
+
         if ($placeId === '') {
+            $this->logPhoneIssue('WARNING', 'get_phone missing place_id', []);
             http_response_code(400);
 
             echo json_encode([
@@ -1326,15 +1355,34 @@ final class DivarController
             return;
         }
 
+        $storedPhone = $this->lookupStoredDivarPhone($placeId);
+
+        if ($storedPhone !== null) {
+            $this->logPhoneIssue('INFO', 'get_phone reused stored phone', [
+                'place_id' => $placeId,
+            ]);
+
+            echo json_encode([
+                'success' => true,
+                'already_saved' => true,
+                'phone_number' => $storedPhone,
+            ], JSON_UNESCAPED_UNICODE);
+
+            return;
+        }
+
         /*
          * Get Divar cookies from the current session.
          */
         $cookies = DivarCookieManager::getCookies();
-        error_log(
-            'DIVAR COOKIE NAMES: ' .
-            implode(', ', array_keys($cookies))
-        );
+        $this->logPhoneIssue('INFO', 'get_phone session cookies', [
+            'place_id' => $placeId,
+            'cookie_names' => array_keys($cookies),
+        ]);
         if (empty($cookies)) {
+            $this->logPhoneIssue('WARNING', 'get_phone not authenticated', [
+                'place_id' => $placeId,
+            ]);
             http_response_code(401);
 
             echo json_encode([
@@ -1349,6 +1397,9 @@ final class DivarController
         $ad = DivarSearchAdStore::find($placeId);
 
         if ($ad === null) {
+            $this->logPhoneIssue('WARNING', 'get_phone missing search snapshot', [
+                'place_id' => $placeId,
+            ]);
             http_response_code(409);
 
             echo json_encode([
@@ -1475,18 +1526,23 @@ final class DivarController
 
         curl_close($ch);
 
+        $this->logPhoneIssue('INFO', 'get_phone Divar HTTP', [
+            'place_id' => $placeId,
+            'http_code' => $httpCode,
+            'curl_error' => $curlError === '' ? null : $curlError,
+            'response_bytes' => is_string($response) ? strlen($response) : 0,
+        ]);
+
         /*
          * cURL error.
          */
         if ($response === false || $curlError !== '') {
 
-            Logger::error(
-                'Divar phone request cURL error',
-                [
-                    'place_id' => $placeId,
-                    'error' => $curlError
-                ]
-            );
+            $this->logPhoneIssue('ERROR', 'Divar phone request cURL error', [
+                'place_id' => $placeId,
+                'url' => $url,
+                'error' => $curlError,
+            ]);
 
             http_response_code(500);
 
@@ -1500,18 +1556,37 @@ final class DivarController
         }
 
         /*
-         * Authentication failure.
+         * Expired Divar session (JWT): drop the dead cookies and ask the
+         * browser to open the OTP login, same as a first-time login.
+         * Captcha / other 403s still use phone_fetch_failed so they do not
+         * loop the login modal.
          */
         if ($httpCode === 401 || $httpCode === 403) {
+            if ($this->isExpiredDivarSession($httpCode, $response)) {
+                DivarCookieManager::clearCookies();
 
-            Logger::error(
-                'Divar phone request authentication failed',
-                [
+                $this->logPhoneIssue('WARNING', 'Divar session expired, OTP login required', [
                     'place_id' => $placeId,
                     'http_code' => $httpCode,
-                    'response' => $response
-                ]
-            );
+                    'response' => is_string($response) ? $response : null,
+                ]);
+
+                http_response_code(401);
+
+                echo json_encode([
+                    'success' => false,
+                    'authentication_required' => true,
+                    'message' => 'نشست دیوار منقضی شده است. با شماره موبایل دوباره وارد شوید.',
+                ], JSON_UNESCAPED_UNICODE);
+
+                return;
+            }
+
+            $this->logPhoneIssue('ERROR', 'Divar phone request authentication failed', [
+                'place_id' => $placeId,
+                'http_code' => $httpCode,
+                'response' => is_string($response) ? $response : null,
+            ]);
 
             http_response_code(401);
 
@@ -1530,14 +1605,11 @@ final class DivarController
          */
         if ($httpCode < 200 || $httpCode >= 300) {
 
-            Logger::error(
-                'Divar phone request failed',
-                [
-                    'place_id' => $placeId,
-                    'http_code' => $httpCode,
-                    'response' => $response
-                ]
-            );
+            $this->logPhoneIssue('ERROR', 'Divar phone request failed', [
+                'place_id' => $placeId,
+                'http_code' => $httpCode,
+                'response' => is_string($response) ? $response : null,
+            ]);
 
             http_response_code(
                 $httpCode > 0 ? $httpCode : 500
@@ -1565,13 +1637,11 @@ final class DivarController
             json_last_error() !== JSON_ERROR_NONE
         ) {
 
-            Logger::error(
-                'Invalid Divar phone response',
-                [
-                    'place_id' => $placeId,
-                    'response' => $response
-                ]
-            );
+            $this->logPhoneIssue('ERROR', 'Invalid Divar phone response', [
+                'place_id' => $placeId,
+                'json_error' => json_last_error_msg(),
+                'response' => is_string($response) ? $response : null,
+            ]);
 
             http_response_code(500);
 
@@ -1584,44 +1654,9 @@ final class DivarController
             return;
         }
 
-        /*
-         * Extract phone number.
-         */
-        $phoneNumber = null;
+        $phoneNumber = DivarPhoneParser::parse($result);
 
-        if (
-            isset($result['widget_list']) &&
-            is_array($result['widget_list'])
-        ) {
-
-            foreach ($result['widget_list'] as $widget) {
-
-                if (
-                    ($widget['widget_type'] ?? '') ===
-                    'UNEXPANDABLE_ROW' &&
-
-                    ($widget['data']['title'] ?? '') ===
-                    'شمارهٔ موبایل' &&
-
-                    isset($widget['data']['value'])
-                ) {
-
-                    $phoneNumber = trim(
-                        (string) $widget['data']['value']
-                    );
-
-                    break;
-                }
-            }
-        }
-
-        /*
-         * Phone found.
-         */
-        if (
-            $phoneNumber !== null &&
-            $phoneNumber !== ''
-        ) {
+        if ($phoneNumber !== null && $phoneNumber !== '') {
             try {
                 if (($_SESSION['divar_schema_ready'] ?? null) !== Schema::VERSION) {
                     Schema::ensureTables();
@@ -1630,9 +1665,10 @@ final class DivarController
 
                 (new AccommodationRepository())->upsertWithContact($ad, $phoneNumber);
             } catch (\Throwable $e) {
-                Logger::error('Divar ad/contact could not be saved', [
+                $this->logPhoneIssue('ERROR', 'Divar ad/contact could not be saved', [
                     'place_id' => $placeId,
                     'exception' => get_class($e),
+                    'error' => $e->getMessage(),
                     'code' => $e->getCode(),
                 ]);
 
@@ -1646,24 +1682,26 @@ final class DivarController
                 return;
             }
 
+            $this->logPhoneIssue('INFO', 'get_phone stored number', [
+                'place_id' => $placeId,
+                'http_code' => $httpCode,
+            ]);
+
             echo json_encode([
                 'success' => true,
-                'phone_number' => $phoneNumber
+                'already_saved' => true,
+                'phone_number' => $phoneNumber,
             ], JSON_UNESCAPED_UNICODE);
 
             return;
         }
 
-        /*
-         * Phone wasn't found.
-         */
-        Logger::error(
-            'Divar phone number not found',
-            [
-                'place_id' => $placeId,
-                'response' => $response
-            ]
-        );
+        $this->logPhoneIssue('ERROR', 'Divar phone number not found in response', [
+            'place_id' => $placeId,
+            'http_code' => $httpCode,
+            'widgets' => DivarPhoneParser::widgetSummary($result),
+            'response' => is_string($response) ? $response : null,
+        ]);
 
         http_response_code(404);
 
@@ -1762,7 +1800,7 @@ final class DivarController
         curl_close($ch);
 
         if ($response === false || $curlError !== '') {
-            Logger::error('Divar send-code cURL error', ['error' => $curlError]);
+            $this->logPhoneIssue('ERROR', 'Divar send-code cURL error', ['error' => $curlError]);
             http_response_code(500);
             echo json_encode(['success' => false, 'message' => 'خطا در ارتباط با دیوار'], JSON_UNESCAPED_UNICODE);
             return;
@@ -1771,7 +1809,10 @@ final class DivarController
         $result = json_decode($response, true);
 
         if (!is_array($result) || $httpCode < 200 || $httpCode >= 300) {
-            Logger::error('Divar send-code failed', ['http_code' => $httpCode]);
+            $this->logPhoneIssue('ERROR', 'Divar send-code failed', [
+                'http_code' => $httpCode,
+                'response' => is_string($response) ? $response : null,
+            ]);
             http_response_code($httpCode > 0 ? $httpCode : 500);
             echo json_encode(['success' => false, 'message' => 'ارسال کد ناموفق بود'], JSON_UNESCAPED_UNICODE);
             return;
@@ -1815,6 +1856,8 @@ final class DivarController
             'device_id' => $deviceId,
             'created_at' => time(),
         ];
+
+        $this->logPhoneIssue('INFO', 'Divar OTP sent', ['phone_suffix' => substr($phone, -4)]);
 
         echo json_encode([
             'success' => true,
@@ -1950,7 +1993,9 @@ final class DivarController
 
         DivarCookieManager::setCookies($cookies);
 
-        Logger::info('Divar login succeeded via OTP', ['cookie_names' => array_keys($cookies)]);
+        $this->logPhoneIssue('INFO', 'Divar login succeeded via OTP', [
+            'cookie_names' => array_keys($cookies),
+        ]);
 
         unset($_SESSION['divar_otp']);
 
@@ -1992,8 +2037,6 @@ final class DivarController
             $this->saveResultSetKey,
             $this->savedPlaceIds
         );
-        // Pass existing call logs to view
-        $view->setExistingCallLogs($this->existingCallLogs);
         $view->render();
     }
 }

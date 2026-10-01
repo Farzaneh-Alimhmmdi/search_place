@@ -9,8 +9,16 @@
 --                      valid available number while Divar phone collection remains
 --                      a later step
 --   accommodations  -> collected provider places/listings
---   call_logs       -> click-to-call status for providers with call tracking;
---                      Balad uses the save action only
+--   call_logs       -> leftover table; search no longer writes call logs.
+--                      Saving an accommodation (and its contact phone) is enough.
+--
+-- Indexes for the search-page stored-phone lookup:
+--   The unique key uq_provider_external_id (provider, external_id) already
+--   answers "is this listing stored?" for the current page (an IN list of
+--   ~24 tokens). Phones are then read through accommodations.contact_id
+--   (idx_accommodations_contact_id) joining contacts.id (PRIMARY KEY).
+--   contacts.phone is already unique. A second (provider, external_id)
+--   index would only duplicate the unique key, so it is not added.
 --
 -- The file is idempotent: every statement uses CREATE TABLE IF NOT EXISTS,
 -- so it is safe to run as many times as you want.
