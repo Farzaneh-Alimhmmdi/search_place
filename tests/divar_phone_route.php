@@ -135,7 +135,8 @@ namespace {
             unset($_SESSION['divar_cookies']);
             break;
         case 'expired_auth':
-            $GLOBALS['divar_status'] = 401;
+            $GLOBALS['divar_status'] = 403;
+            $GLOBALS['divar_response'] = 'Jwt is expired';
             break;
         case 'captcha_blocked':
             $GLOBALS['divar_status'] = 403;
@@ -204,7 +205,7 @@ namespace {
             expectSame($statuses[$scenario], http_response_code() ?: 200, 'HTTP status');
             expectSame($statuses[$scenario] === 200, $response['success'], 'JSON success');
 
-            $fetchFailed = in_array($scenario, ['no_phone', 'expired_auth', 'captcha_blocked',
+            $fetchFailed = in_array($scenario, ['no_phone', 'captcha_blocked',
                 'rate_limited', 'server_error', 'invalid_response', 'transport_error'], true);
             expectSame($fetchFailed, $response['phone_fetch_failed'] ?? false, 'Provider failure flag');
             if ($fetchFailed) {
@@ -212,8 +213,9 @@ namespace {
                     $response['message'], 'Exact phone-fetch failure message');
                 expectSame(false, isset($response['response']), 'Do not expose the raw Divar error response');
             }
-            if ($scenario === 'unauthenticated') {
-                expectSame(true, $response['authentication_required'], 'Initial OTP login is unchanged');
+            if ($scenario === 'unauthenticated' || $scenario === 'expired_auth') {
+                expectSame(true, $response['authentication_required'], 'OTP login is required');
+                expectSame(false, $response['phone_fetch_failed'] ?? false, 'Expired JWT must reopen OTP, not the captcha alert');
             }
             if (in_array($scenario, ['db_failure', 'schema_failure'], true)) {
                 expectSame('شماره تماس دریافت شد، اما ذخیره آگهی و مخاطب ناموفق بود. لطفاً دوباره تلاش کنید.',

@@ -1302,6 +1302,21 @@ final class DivarController
         Logger::issue('divar_phone', $level, $message, $context);
     }
 
+    /**
+     * True when Divar rejected the stored session and the user must log in
+     * again with their phone number (OTP), not when a captcha blocked us.
+     */
+    private function isExpiredDivarSession(int $httpCode, mixed $response): bool
+    {
+        if ($httpCode === 401) {
+            return true;
+        }
+
+        $body = is_string($response) ? $response : '';
+
+        return preg_match('/jwt|expired|unauthorized|unauthenticated/i', $body) === 1;
+    }
+
     private function lookupStoredDivarPhone(string $placeId): ?string
     {
         try {
@@ -1541,9 +1556,31 @@ final class DivarController
         }
 
         /*
-         * Authentication failure.
+         * Expired Divar session (JWT): drop the dead cookies and ask the
+         * browser to open the OTP login, same as a first-time login.
+         * Captcha / other 403s still use phone_fetch_failed so they do not
+         * loop the login modal.
          */
         if ($httpCode === 401 || $httpCode === 403) {
+            if ($this->isExpiredDivarSession($httpCode, $response)) {
+                DivarCookieManager::clearCookies();
+
+                $this->logPhoneIssue('WARNING', 'Divar session expired, OTP login required', [
+                    'place_id' => $placeId,
+                    'http_code' => $httpCode,
+                    'response' => is_string($response) ? $response : null,
+                ]);
+
+                http_response_code(401);
+
+                echo json_encode([
+                    'success' => false,
+                    'authentication_required' => true,
+                    'message' => 'نشست دیوار منقضی شده است. با شماره موبایل دوباره وارد شوید.',
+                ], JSON_UNESCAPED_UNICODE);
+
+                return;
+            }
 
             $this->logPhoneIssue('ERROR', 'Divar phone request authentication failed', [
                 'place_id' => $placeId,
@@ -1763,7 +1800,7 @@ final class DivarController
         curl_close($ch);
 
         if ($response === false || $curlError !== '') {
-            Logger::error('Divar send-code cURL error', ['error' => $curlError]);
+            $this->logPhoneIssue('ERROR', 'Divar send-code cURL error', ['error' => $curlError]);
             http_response_code(500);
             echo json_encode(['success' => false, 'message' => 'خطا در ارتباط با دیوار'], JSON_UNESCAPED_UNICODE);
             return;
@@ -1772,7 +1809,10 @@ final class DivarController
         $result = json_decode($response, true);
 
         if (!is_array($result) || $httpCode < 200 || $httpCode >= 300) {
-            Logger::error('Divar send-code failed', ['http_code' => $httpCode]);
+            $this->logPhoneIssue('ERROR', 'Divar send-code failed', [
+                'http_code' => $httpCode,
+                'response' => is_string($response) ? $response : null,
+            ]);
             http_response_code($httpCode > 0 ? $httpCode : 500);
             echo json_encode(['success' => false, 'message' => 'ارسال کد ناموفق بود'], JSON_UNESCAPED_UNICODE);
             return;
@@ -1816,6 +1856,8 @@ final class DivarController
             'device_id' => $deviceId,
             'created_at' => time(),
         ];
+
+        $this->logPhoneIssue('INFO', 'Divar OTP sent', ['phone_suffix' => substr($phone, -4)]);
 
         echo json_encode([
             'success' => true,
@@ -1951,7 +1993,9 @@ final class DivarController
 
         DivarCookieManager::setCookies($cookies);
 
-        Logger::info('Divar login succeeded via OTP', ['cookie_names' => array_keys($cookies)]);
+        $this->logPhoneIssue('INFO', 'Divar login succeeded via OTP', [
+            'cookie_names' => array_keys($cookies),
+        ]);
 
         unset($_SESSION['divar_otp']);
 

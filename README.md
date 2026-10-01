@@ -98,6 +98,9 @@ number without calling Divar.
 - Phone fetch steps and failures are written to `storage/logs/divar_phone.log`
   (and `storage/logs/app.log`) at the project root, not under `public/`.
   Cookie values are never stored. Use that file when a number does not appear.
+- An expired Divar JWT (`Jwt is expired` / 401) clears the dead session cookies
+  and reopens the existing phone/OTP login so the user can get a fresh token.
+  After a successful OTP the pending **دریافت شماره تماس** request is retried.
 
 ### Indexes for the stored-phone lookup
 No extra index was added. The current page's tokens (typically 24) are looked

@@ -111,7 +111,7 @@ final class Logger
         foreach ($context as $key => $value) {
             $name = strtolower((string) $key);
 
-            if (in_array($name, $blocked, true) || str_contains($name, 'cookie')) {
+            if (in_array($name, $blocked, true)) {
                 $clean[$key] = '[redacted]';
                 continue;
             }

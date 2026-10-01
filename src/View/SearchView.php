@@ -1517,6 +1517,10 @@ final class SearchView
                     pendingPlaceButton = null;
                 }
 
+                function hideDivarModal() {
+                    divarModalOverlay.classList.remove('open');
+                }
+
                 document.getElementById('divarCancelPhone').addEventListener('click', closeDivarModal);
                 document.getElementById('divarCancelOtp').addEventListener('click', closeDivarModal);
 
@@ -1582,9 +1586,11 @@ final class SearchView
                             this.disabled = false;
                             this.textContent = 'تأیید';
                             if (data.success) {
-                                closeDivarModal();
-                                if (pendingPlaceButton) {
-                                    fetchDivarPhone(pendingPlaceButton);
+                                const resumeButton = pendingPlaceButton;
+                                hideDivarModal();
+                                pendingPlaceButton = null;
+                                if (resumeButton) {
+                                    fetchDivarPhone(resumeButton);
                                 }
                             } else {
                                 divarOtpError.textContent = data.message || 'کد وارد شده صحیح نیست';
