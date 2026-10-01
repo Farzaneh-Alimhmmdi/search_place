@@ -85,13 +85,27 @@ final class BaladController
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // Handle call logging (AJAX)
             if (isset($_POST['action']) && $_POST['action'] === 'call' && isset($_POST['place_id'])) {
-                $this->logCall(
-                    $_POST['place_id'] ?? '',
-                    $_POST['phone'] ?? '',
-                    $_POST['city'] ?? $this->selectedCity ?? '',
-                    $_POST['category'] ?? $this->selectedCategory ?? '',
-                    $_POST['description'] ?? ''
-                );
+                try {
+                    // Call tracking uses its own table and never writes to the
+                    // Divar collector's accommodations data.
+                    $this->logCall(
+                        $_POST['place_id'] ?? '',
+                        $_POST['phone'] ?? '',
+                        $_POST['city'] ?? $this->selectedCity ?? '',
+                        $_POST['category'] ?? $this->selectedCategory ?? '',
+                        $_POST['description'] ?? ''
+                    );
+                } catch (\Throwable $e) {
+                    Logger::error('Balad call logging failed', ['error' => $e->getMessage()]);
+                    http_response_code(500);
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode([
+                        'success' => false,
+                        'message' => 'ثبت تماس در پایگاه داده ناموفق بود.',
+                    ]);
+                    exit;
+                }
+
                 return; // Exit early for AJAX call
             }
 

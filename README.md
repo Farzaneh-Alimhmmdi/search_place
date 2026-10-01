@@ -137,8 +137,8 @@ explicitly instead of silently falling back to Tehran.
 
 ## Database Schema
 `database/schema.sql` is the single source of truth and is applied
-automatically before Balad results are stored or a Divar collection starts
-(`Src\Support\Schema::ensureTables()`), so no manual migration is required.
+automatically before Balad results/call logs are stored or a Divar collection
+starts (`Src\Support\Schema::ensureTables()`), so no manual migration is required.
 Every statement uses `CREATE TABLE IF NOT EXISTS`,
 therefore the file can also be applied by hand as often as you like:
 
@@ -146,7 +146,8 @@ therefore the file can also be applied by hand as often as you like:
 mysql -u root -p search_place < database/schema.sql
 ```
 
-There are exactly two tables:
+There are three application tables (the Divar collector itself still writes only to
+`contacts` and `accommodations`):
 
 - `contacts`: phone numbers, unique per phone (`uq_contacts_phone`). Filled by a
   later step, not by the collector.
@@ -160,6 +161,8 @@ There are exactly two tables:
   - `raw_data` (JSON): the complete raw provider payload for the stored place/ad
   - `latitude` / `longitude` / `price` are nullable and are **never overwritten
     with NULL** by a re-run of the collector
+- `call_logs`: click-to-call records and their `pending` / `completed` /
+  `cancelled` status. This is separate from the Divar collection flow.
 
 Requires MySQL 5.7+ / MariaDB 10.2+ (JSON column type). On very old InnoDB
 setups that reject a full length index on `title` (error 1071), `Schema`
@@ -178,7 +181,7 @@ Configuration files include:
 - `config/provinces.php`: Province and city mappings
 - `config/cities.json`: City list with Divar slugs and Divar city ids
 - `config/divar.php`: Divar settings, including the `collect` block
-- `database/schema.sql`: Database schema (`contacts`, `accommodations`)
+- `database/schema.sql`: Database schema (`contacts`, `accommodations`, `call_logs`)
 - `.env`: Environment variables for database and application settings
 
 ## Call Tracking

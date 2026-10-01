@@ -3,11 +3,12 @@
 -- ---------------------------------------------------------------------------
 -- Requires MySQL 5.7+ / MariaDB 10.2+ (JSON column type).
 --
--- Two tables only:
+-- Three application tables:
 --
 --   contacts        -> phone numbers (filled in a later step)
---   accommodations  -> the collected listings (Divar ads, ...), optionally
---                      linked to one contact row.
+--   accommodations  -> collected provider places/listings
+--   call_logs       -> call-button actions and their status (not used by the
+--                      Divar collector; collection state remains in session)
 --
 -- The file is idempotent: every statement uses CREATE TABLE IF NOT EXISTS,
 -- so it is safe to run as many times as you want.
@@ -75,6 +76,28 @@ CREATE TABLE IF NOT EXISTS accommodations (
     INDEX idx_accommodations_title (title),
     INDEX idx_accommodations_city (city),
     INDEX idx_accommodations_province (province)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS call_logs (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+
+    place_id VARCHAR(255) NOT NULL,
+    phone_number VARCHAR(32) NOT NULL,
+    city VARCHAR(150) NULL,
+    category VARCHAR(100) NULL,
+    description TEXT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    ip_address VARCHAR(45) NULL,
+    user_agent TEXT NULL,
+
+    created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP
+        ON UPDATE CURRENT_TIMESTAMP,
+
+    INDEX idx_call_logs_place_phone (place_id(120), phone_number),
+    INDEX idx_call_logs_status_created (status, created_at)
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci;

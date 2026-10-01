@@ -7,8 +7,9 @@ namespace Src\Support;
  *
  * Why the session and not a table?
  *
- *  - The project owner asked for exactly two tables (contacts, accommodations),
- *    so the collector must not add its own bookkeeping table.
+ *  - The Divar collector uses only contacts and accommodations; call_logs is a
+ *    separate call-tracking table, not collection bookkeeping.
+ *    The collector must not add its own bookkeeping table.
  *  - The harvest is driven by the browser: one HTTP request fetches ONE Divar
  *    page, stores it and returns. The only thing that must survive between
  *    those requests is Divar's cursor plus a few counters - which is exactly

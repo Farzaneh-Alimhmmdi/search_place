@@ -87,9 +87,10 @@
   city, category and the optional keyword
 - This page stores the results in the database instead of displaying them: no
   result cards and no pagination (approved exception to rule 6)
-- Only two tables are used: `contacts` and `accommodations`
-  (see `database/schema.sql`). The collector must not add its own bookkeeping
-  table; run state lives in the PHP session
+- Divar collection writes only to `contacts` and `accommodations`
+  (see `database/schema.sql`). The separate `call_logs` table is only for
+  call tracking and must not be used by the collector. The collector must not
+  add its own bookkeeping table; run state lives in the PHP session
 - Large result sets must be harvested in small steps: one HTTP request fetches
   exactly one Divar page and writes that one batch
 - Divar's cursor is kept server side (PHP session) so a run can be paused and
