@@ -251,6 +251,97 @@ final class AccommodationRepository
     }
 
     /**
+     * Stored phone for one listing, if that ad was already saved with a contact.
+     *
+     * Lookup path:
+     *   UNIQUE uq_provider_external_id (provider, external_id)
+     *     -> accommodations.contact_id (idx_accommodations_contact_id)
+     *     -> contacts.id (PRIMARY KEY) / contacts.phone (uq_contacts_phone)
+     *
+     * That is already an index nested-loop join, so a second
+     * (provider, external_id) index would only duplicate the unique key.
+     */
+    public function findStoredPhone(string $provider, string $externalId): ?string
+    {
+        $externalId = trim($externalId);
+
+        if ($provider === '' || $externalId === '') {
+            return null;
+        }
+
+        $statement = $this->pdo->prepare(
+            'SELECT c.phone FROM accommodations a ' .
+            'INNER JOIN contacts c ON c.id = a.contact_id ' .
+            'WHERE a.provider = ? AND a.external_id = ? ' .
+            "AND c.phone IS NOT NULL AND c.phone != '' " .
+            'LIMIT 1'
+        );
+        $statement->execute([$provider, $externalId]);
+        $phone = $statement->fetchColumn();
+
+        return is_string($phone) && $phone !== '' ? $phone : null;
+    }
+
+    /**
+     * Stored listings for the current result page, including contact phones.
+     *
+     * The IN list is the page's tokens (typically 24). MySQL uses
+     * uq_provider_external_id for that filter; phones come from the contact
+     * join above. Chunking keeps the placeholder list bounded.
+     *
+     * @param string[] $externalIds
+     * @return array<string, array{phone: ?string}>
+     */
+    public function findStoredByExternalIds(string $provider, array $externalIds): array
+    {
+        $ids = [];
+
+        foreach ($externalIds as $id) {
+            if (!is_string($id)) {
+                continue;
+            }
+
+            $id = trim($id);
+
+            if ($id !== '') {
+                $ids[$id] = $id;
+            }
+        }
+
+        if ($provider === '' || $ids === []) {
+            return [];
+        }
+
+        $stored = [];
+
+        foreach (array_chunk(array_values($ids), 400) as $chunk) {
+            $placeholders = implode(',', array_fill(0, count($chunk), '?'));
+            $statement = $this->pdo->prepare(
+                'SELECT a.external_id, c.phone ' .
+                'FROM accommodations a ' .
+                'LEFT JOIN contacts c ON c.id = a.contact_id ' .
+                'WHERE a.provider = ? AND a.external_id IN (' . $placeholders . ')'
+            );
+            $statement->execute(array_merge([$provider], $chunk));
+
+            foreach ($statement->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $id = (string) ($row['external_id'] ?? '');
+
+                if ($id === '') {
+                    continue;
+                }
+
+                $phone = $row['phone'] ?? null;
+                $stored[$id] = [
+                    'phone' => is_string($phone) && $phone !== '' ? $phone : null,
+                ];
+            }
+        }
+
+        return $stored;
+    }
+
+    /**
      * Total number of stored rows of one provider.
      *
      * Uses the (provider, external_id) unique index, so it stays an index only

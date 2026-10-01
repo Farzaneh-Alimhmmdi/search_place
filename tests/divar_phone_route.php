@@ -44,7 +44,9 @@ namespace {
     $scenario = $argv[1] ?? 'saved';
     $statuses = [
         'search' => 200,
+        'search_stored' => 200,
         'saved' => 200,
+        'already_stored' => 200,
         'new_schema' => 200,
         'db_failure' => 500,
         'schema_failure' => 500,
@@ -84,6 +86,7 @@ namespace {
 
     switch ($scenario) {
         case 'search':
+        case 'search_stored':
             $_POST = ['provider' => 'divar', 'province' => 'تهران', 'city' => 'تهران',
                 'place' => 'temporary-rent', 'query' => 'آپارتمان'];
             $GLOBALS['divar_response'] = json_encode([
@@ -91,6 +94,17 @@ namespace {
                     'data' => testAd()['raw'] + ['token' => 'test-token']]],
                 'has_next_page' => false,
             ], JSON_UNESCAPED_UNICODE);
+            if ($scenario === 'search_stored') {
+                $GLOBALS['test_pdo']->queryResult = [
+                    ['external_id' => 'test-token', 'phone' => '09123456789'],
+                ];
+            }
+            break;
+        case 'already_stored':
+            unset($_SESSION['divar_cookies']);
+            $GLOBALS['test_pdo']->queryResult = [
+                ['phone' => '09123456789'],
+            ];
             break;
         case 'new_schema':
         case 'schema_failure':
@@ -144,13 +158,13 @@ namespace {
     register_shutdown_function(static function () use ($scenario, $statuses): void {
         $body = ob_get_clean();
         try {
-            if ($scenario === 'search') {
+            if ($scenario === 'search' || $scenario === 'search_stored') {
                 $stored = DivarSearchAdStore::find('test-token');
                 expectSame('اجاره روزانه آپارتمان', $stored['title'], 'Snapshot from the actual search');
                 expectSame('تهران', $stored['city'], 'Search context');
                 expectSame('temporary-rent', $stored['category'], 'Search category');
                 expectSame(null, $stored['contact_id'], 'Search does not collect phones');
-                expectSame(true, str_contains($body, 'data-place-id="test-token"'), 'Phone button is rendered');
+                expectSame(false, str_contains($body, 'class="call-btn'), 'Divar does not log calls');
                 expectSame(true, str_contains($body,
                     "const divarPhoneFailureMessage = 'وارد سایت دیوار شوید و کپجا را حل کنیدتا دسترسی شما باز شود';"),
                     'Frontend failure fallback uses the requested message');
@@ -158,6 +172,18 @@ namespace {
                     'Provider failures display the message instead of reopening the OTP modal');
                 expectSame([], $GLOBALS['test_pdo']->events, 'Search alone starts no DB transaction');
                 expectSame(['https://api.divar.ir/v8/postlist/w/search'], $GLOBALS['divar_requests'], 'One search page');
+
+                if ($scenario === 'search_stored') {
+                    expectSame(true, str_contains($body, '09123456789'), 'Stored phone is shown in the result');
+                    expectSame(true, str_contains($body, '✅ ذخیره شده'), 'Stored listing is marked saved');
+                    expectSame(false, str_contains($body, 'class="divar-phone-btn'), 'Stored listing has no fetch button');
+                    echo "PASS: Divar search shows a stored phone instead of the fetch button\n";
+                    return;
+                }
+
+                expectSame(true, str_contains($body, 'class="divar-phone-btn"'), 'Phone button is rendered');
+                expectSame(true, str_contains($body, 'data-place-id="test-token"'), 'Phone button targets the ad');
+                expectSame(false, str_contains($body, 'class="save-place-btn'), 'Divar has no separate save button');
                 echo "PASS: Divar search remembers the listing for get_phone\n";
                 return;
             }
@@ -188,14 +214,21 @@ namespace {
 
             if ($response['success']) {
                 expectSame('09123456789', $response['phone_number'], 'Phone response');
-                expectSame(2, count($writes), 'Save both the contact and ad before success');
-                expectSame(['begin', 'commit'], $pdo->events, 'Committed save');
-                expectSame('test-token', $writes[1]['params'][11], 'Save the searched ad');
-                if ($scenario === 'new_schema') {
-                    expectSame(Schema::VERSION, $_SESSION['divar_schema_ready'], 'Schema prepared');
-                    expectSame(2, count(array_filter($pdo->executions,
-                        static fn (array $execution): bool => str_starts_with($execution['sql'], 'CREATE TABLE'))),
-                        'Create both tables automatically');
+                expectSame(true, $response['already_saved'] ?? false, 'Fetched phones are stored');
+                if ($scenario === 'already_stored') {
+                    expectSame([], $writes, 'Reuse the stored phone without writing again');
+                    expectSame([], $pdo->events, 'Stored lookup is not a write transaction');
+                    expectSame([], $GLOBALS['divar_requests'], 'Do not call Divar again for a stored phone');
+                } else {
+                    expectSame(2, count($writes), 'Save both the contact and ad before success');
+                    expectSame(['begin', 'commit'], $pdo->events, 'Committed save');
+                    expectSame('test-token', $writes[1]['params'][11], 'Save the searched ad');
+                    if ($scenario === 'new_schema') {
+                        expectSame(Schema::VERSION, $_SESSION['divar_schema_ready'], 'Schema prepared');
+                        expectSame(2, count(array_filter($pdo->executions,
+                            static fn (array $execution): bool => str_starts_with($execution['sql'], 'CREATE TABLE'))),
+                            'Create both tables automatically');
+                    }
                 }
             } elseif ($scenario === 'db_failure') {
                 expectSame(2, count($writes), 'Attempted both writes');
@@ -205,7 +238,7 @@ namespace {
                 expectSame([], $writes, 'No persistence after an invalid/unsuccessful fetch');
             }
 
-            if (in_array($scenario, ['unauthenticated', 'unknown_ad', 'missing_id', 'malformed_id'], true)) {
+            if (in_array($scenario, ['unauthenticated', 'unknown_ad', 'missing_id', 'malformed_id', 'already_stored'], true)) {
                 expectSame([], $GLOBALS['divar_requests'], 'No unnecessary Divar request');
             } else {
                 expectSame(['https://api.divar.ir/v8/postcontact/web/contact_info_v2/test-token'],

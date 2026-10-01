@@ -23,6 +23,7 @@ final class RecordingPDO extends PDO
 {
     public array $executions = [];
     public array $events = [];
+    public array $queryResult = [];
     public string $contactId = '42';
     public ?string $failOn = null;
     private bool $transaction = false;
@@ -93,7 +94,50 @@ final class RecordingStatement extends PDOStatement
         return true;
     }
 
-    public function fetchAll(int $mode = PDO::FETCH_DEFAULT, mixed ...$args): array { return []; }
+    public function fetchAll(int $mode = PDO::FETCH_DEFAULT, mixed ...$args): array
+    {
+        $rows = $this->pdo->queryResult;
+
+        if ($mode === PDO::FETCH_COLUMN) {
+            $column = is_int($args[0] ?? null) ? $args[0] : 0;
+            $values = [];
+
+            foreach ($rows as $row) {
+                if (is_array($row)) {
+                    $values[] = array_values($row)[$column] ?? reset($row);
+                } else {
+                    $values[] = $row;
+                }
+            }
+
+            return $values;
+        }
+
+        return $rows;
+    }
+
+    public function fetch(int $mode = PDO::FETCH_DEFAULT, int $cursorOrientation = PDO::FETCH_ORI_NEXT, int $cursorOffset = 0): mixed
+    {
+        return $this->pdo->queryResult[0] ?? false;
+    }
+
+    public function fetchColumn(int $column = 0): mixed
+    {
+        $row = $this->fetch();
+
+        if ($row === false) {
+            return false;
+        }
+
+        if (!is_array($row)) {
+            return $row;
+        }
+
+        $values = array_values($row);
+
+        return $values[$column] ?? false;
+    }
+
     public function rowCount(): int { return 1; }
 }
 

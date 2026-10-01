@@ -5,6 +5,7 @@ namespace Src\Controller;
 use Src\Support\Config;
 use Src\Support\Db;
 use Src\Support\Logger;
+use Src\Support\ProviderAccommodationMapper;
 use Src\Support\Schema;
 use Src\Support\SelectedPlaceService;
 use Src\Http\CurlHttpClient;
@@ -36,7 +37,6 @@ final class DivarController
     private string $selectedQuery = '';
     private ?array $results = null;
     private ?string $error = null;
-    private array $existingCallLogs = [];
     private ?string $saveResultSetKey = null;
     private array $savedPlaceIds = [];
 
@@ -628,23 +628,20 @@ final class DivarController
         $this->selectedQuery = $_POST['query'] ?? '';
         $this->results = null;
         $this->error = null;
-        $this->existingCallLogs = [];
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (($_POST['action'] ?? '') === 'save_place') {
                 SelectedPlaceAction::handle('divar');
             }
 
-            // Handle call logging (AJAX)
-            if (isset($_POST['action']) && $_POST['action'] === 'call' && isset($_POST['place_id'])) {
-                $this->logCall(
-                    $_POST['place_id'] ?? '',
-                    $_POST['phone'] ?? '',
-                    $_POST['city'] ?? $this->selectedCity ?? '',
-                    $_POST['category'] ?? $this->selectedCategory ?? '',
-                    $_POST['description'] ?? ''
-                );
-                exit; // logCall() already exits internally; kept for safety
+            if (isset($_POST['action']) && $_POST['action'] === 'call') {
+                header('Content-Type: application/json; charset=utf-8');
+                http_response_code(410);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'ثبت تماس برای نتایج دیوار غیرفعال است. ذخیره شماره تماس کافی است.',
+                ], JSON_UNESCAPED_UNICODE);
+                exit;
             }
             if (
                 isset($_POST['action']) &&
@@ -1044,7 +1041,6 @@ final class DivarController
                                 !empty($this->results['places'])
                             ) {
                                 $this->prepareSaveState($citySlug, $requestedPage);
-                                $this->loadExistingCallLogs();
                             }
 
                         } catch (\Exception $e) {
@@ -1212,7 +1208,7 @@ final class DivarController
         $this->saveResultSetKey = SelectedPlaceService::remember('divar', $places, $context);
 
         try {
-            $this->savedPlaceIds = SelectedPlaceService::savedIds('divar', $places);
+            $this->hydrateStoredDivarResults($places);
         } catch (\Throwable $e) {
             Logger::warning('Could not check saved Divar places', [
                 'error' => $e->getMessage(),
@@ -1220,62 +1216,55 @@ final class DivarController
         }
     }
 
-    private function loadExistingCallLogs(): void
+    /**
+     * Mark listings that already exist in accommodations and copy any stored
+     * contact phone onto the search result so the view can show it instead of
+     * a "get phone" button.
+     *
+     * @param array<int,mixed> $places
+     */
+    private function hydrateStoredDivarResults(array $places): void
     {
-        $placeIds = [];
-        foreach ($this->results['places'] as $place) {
-            $id = $place['id'] ?? $place['token'] ?? $place['place_id'] ?? null;
-            if ($id) {
-                $placeIds[] = $id;
+        $ids = [];
+
+        foreach ($places as $place) {
+            if (!is_array($place)) {
+                continue;
+            }
+
+            $id = ProviderAccommodationMapper::externalId('divar', $place);
+
+            if ($id !== null) {
+                $ids[] = $id;
             }
         }
 
-        if (empty($placeIds)) return;
+        $records = (new AccommodationRepository())->findStoredByExternalIds('divar', $ids);
+        $this->savedPlaceIds = [];
 
-        $placeholders = implode(',', array_fill(0, count($placeIds), '?'));
-        $query = "SELECT place_id, phone_number, status FROM call_logs WHERE place_id IN ($placeholders)";
-        $stmt = Db::getConnection()->prepare($query);
-        $stmt->execute($placeIds);
-        $logs = $stmt->fetchAll(\PDO::FETCH_ASSOC);
-
-        // Create a lookup map: place_id -> phone_number -> status
-        $this->existingCallLogs = [];
-        foreach ($logs as $log) {
-            $this->existingCallLogs[$log['place_id']][$log['phone_number']] = $log['status'];
-        }
-    }
-
-    private function logCall(string $placeId, string $phone, string $city, string $category, string $description = ''): void
-    {
-        $ipAddress = $_SERVER['REMOTE_ADDR'] ?? '';
-        $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? '';
-
-        // Check if already exists
-        $checkQuery = "SELECT id, status FROM call_logs WHERE place_id = ? AND phone_number = ?";
-        $checkStmt = Db::getConnection()->prepare($checkQuery);
-        $checkStmt->execute([$placeId, $phone]);
-        $existing = $checkStmt->fetch();
-
-        if ($existing) {
-            // Already exists
-            header('Content-Type: application/json');
-            echo json_encode([
-                'success' => true, 
-                'message' => 'Call already logged',
-                'already_exists' => true,
-                'status' => $existing['status']
-            ]);
-            exit;
+        if ($records === [] || !is_array($this->results['places'] ?? null)) {
+            return;
         }
 
-        $query = "INSERT INTO call_logs (place_id, phone_number, city, category, description, status, ip_address, user_agent) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)";
-        $stmt = Db::getConnection()->prepare($query);
-        $stmt->execute([$placeId, $phone, $city, $category, $description, $ipAddress, $userAgent]);
+        foreach ($this->results['places'] as $index => $place) {
+            if (!is_array($place)) {
+                continue;
+            }
 
-        // Return JSON response for AJAX
-        header('Content-Type: application/json');
-        echo json_encode(['success' => true, 'message' => 'Call logged successfully']);
-        exit;
+            $id = ProviderAccommodationMapper::externalId('divar', $place);
+
+            if ($id === null || !isset($records[$id])) {
+                continue;
+            }
+
+            $this->savedPlaceIds[$id] = true;
+            $phone = $records[$id]['phone'] ?? null;
+
+            if (is_string($phone) && $phone !== '') {
+                $this->results['places'][$index]['telephone'] = $phone;
+                $this->results['places'][$index]['phone'] = $phone;
+            }
+        }
     }
 
     private function getCitiesForProvince(string $provinceName): array
@@ -1307,6 +1296,20 @@ final class DivarController
             bin2hex(substr($data, 10, 6))
         );
     }
+    private function lookupStoredDivarPhone(string $placeId): ?string
+    {
+        try {
+            return (new AccommodationRepository())->findStoredPhone('divar', $placeId);
+        } catch (\Throwable $e) {
+            Logger::warning('Could not look up stored Divar phone', [
+                'place_id' => $placeId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
+    }
+
     private function getPhoneNumberAction(): void
     {
         header('Content-Type: application/json; charset=utf-8');
@@ -1321,6 +1324,18 @@ final class DivarController
             echo json_encode([
                 'success' => false,
                 'message' => 'Place ID is required'
+            ], JSON_UNESCAPED_UNICODE);
+
+            return;
+        }
+
+        $storedPhone = $this->lookupStoredDivarPhone($placeId);
+
+        if ($storedPhone !== null) {
+            echo json_encode([
+                'success' => true,
+                'already_saved' => true,
+                'phone_number' => $storedPhone,
             ], JSON_UNESCAPED_UNICODE);
 
             return;
@@ -1648,7 +1663,8 @@ final class DivarController
 
             echo json_encode([
                 'success' => true,
-                'phone_number' => $phoneNumber
+                'already_saved' => true,
+                'phone_number' => $phoneNumber,
             ], JSON_UNESCAPED_UNICODE);
 
             return;
@@ -1992,8 +2008,6 @@ final class DivarController
             $this->saveResultSetKey,
             $this->savedPlaceIds
         );
-        // Pass existing call logs to view
-        $view->setExistingCallLogs($this->existingCallLogs);
         $view->render();
     }
 }

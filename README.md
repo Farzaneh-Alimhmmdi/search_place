@@ -63,8 +63,17 @@ The project follows a clean architecture pattern with separate components for:
    keep their existing behavior.
 
 ## Divar Phone Persistence (`/search_place`)
-When **Divar** is selected, clicking **دریافت شماره تماس** now saves the ad and
-its contact after Divar successfully returns a phone number:
+When **Divar** is selected, each result has **one** action: **دریافت شماره تماس**.
+There is no separate save button and no call-log button (same as Balad: saving
+the listing is enough). Clicking that button fetches the phone from Divar, then
+stores the ad and its contact. After a successful save the card is marked
+**ذخیره شده**, the phone is shown in the result, and the fetch button is
+removed so the number cannot be requested again.
+
+If the ad is already in `accommodations` with a contact phone, search hydrates
+that phone onto the card, shows it as stored, and does not render the fetch
+button. A later `get_phone` request for the same token returns the stored
+number without calling Divar.
 
 - The server remembers a bounded snapshot of the searched ads in the PHP
   session (`DivarSearchAdStore`); the browser only sends the ad token. Searching
@@ -87,6 +96,14 @@ its contact after Divar successfully returns a phone number:
   These provider failures show the message instead of reopening the OTP modal;
   the initial login flow and database-save error messages remain unchanged.
 
+### Indexes for the stored-phone lookup
+No extra index was added. The current page's tokens (typically 24) are looked
+up with `WHERE provider = ? AND external_id IN (...)`, which is exactly the
+unique key `uq_provider_external_id (provider, external_id)`. The phone is
+then read through `accommodations.contact_id` (`idx_accommodations_contact_id`)
+joining `contacts.id` (primary key). `contacts.phone` is already unique. A
+second `(provider, external_id)` index would only duplicate that unique key.
+
 This does not change `/divar_collect`: that page still collects ads without
 fetching phone numbers, and later collector reruns preserve `contact_id`.
 
@@ -98,9 +115,11 @@ sh tests/run.sh
 ```
 
 The tests cover snapshot mapping/limits, contact reuse, phone normalization,
-contact-only listing updates, transaction rollback, schema initialization, and
-search/phone controller responses. Database and Divar I/O are mocked, so the
-suite needs no credentials and never contacts Divar or a production database.
+contact-only listing updates, stored-phone lookup, transaction rollback,
+schema initialization, and search/phone controller responses (including a
+stored listing that shows its phone instead of the fetch button). Database
+and Divar I/O are mocked, so the suite needs no credentials and never
+contacts Divar or a production database.
 
 ## Divar Collection Page (`/divar_collect`)
 A second Divar page whose only job is to **fetch everything and store it in the
@@ -207,9 +226,8 @@ There are three application tables (the Divar collector itself still writes only
   - `raw_data` (JSON): the complete raw provider payload for the stored place/ad
   - `latitude` / `longitude` / `price` are nullable and are **never overwritten
     with NULL** by a re-run of the collector
-- `call_logs`: click-to-call records and their `pending` / `completed` /
-  `cancelled` status for providers that enable call tracking. Balad uses the
-  save action only and does not create call-log records.
+- `call_logs`: leftover table. Search no longer writes call-log records;
+  saving the accommodation (and its contact phone) is enough.
 
 Requires MySQL 5.7+ / MariaDB 10.2+ (JSON column type). On very old InnoDB
 setups that reject a full length index on `title` (error 1071), `Schema`
@@ -232,8 +250,7 @@ Configuration files include:
 - `.env`: Environment variables for database and application settings
 
 ## Call Tracking
-Call tracking remains available for non-Balad providers that show a call button. Balad results use the save action and do not create `call_logs` records.
-- Call data for supported providers is stored in the `call_logs` table
-- Information stored includes: place ID, phone number, city, category, timestamp, IP address, and user agent
-- Database connection is configured via the `.env` file
-- All call data is sanitized before database insertion for security
+Call logging is disabled for every search provider. Balad and the other map
+providers save the selected accommodation; Divar saves the ad when its phone
+is fetched. The `call_logs` table is kept for older rows but is no longer
+written to.

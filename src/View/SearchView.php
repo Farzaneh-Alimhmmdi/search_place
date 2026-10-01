@@ -68,22 +68,6 @@ final class SearchView
         $this->existingCallLogs = $logs;
     }
 
-    private function hasExistingCallLog(array $place): bool
-    {
-        $placeId = $place['id'] ?? $place['token'] ?? $place['place_id'] ?? null;
-        $phone = $place['telephone'] ?? $place['phone'] ?? null;
-        if (!$placeId || !$phone) return false;
-        return isset($this->existingCallLogs[$placeId][$phone]);
-    }
-
-    private function getExistingCallLogStatus(array $place): ?string
-    {
-        $placeId = $place['id'] ?? $place['token'] ?? $place['place_id'] ?? null;
-        $phone = $place['telephone'] ?? $place['phone'] ?? null;
-        if (!$placeId || !$phone) return null;
-        return $this->existingCallLogs[$placeId][$phone] ?? null;
-    }
-
     public function render(): void
     {
         if ($this->provider === 'neshan') {
@@ -752,9 +736,9 @@ final class SearchView
                             $placeId = $place['id'] ?? $place['token'] ?? $place['place_id'] ?? '';
                             $savePlaceId = ProviderAccommodationMapper::externalId($this->provider, $place);
                             $isSaved = $savePlaceId !== null && isset($this->savedPlaceIds[$savePlaceId]);
-                            $hasCallAction = $this->provider !== 'balad' && $hasPhone;
-                            $hasExistingLog = $hasCallAction ? $this->hasExistingCallLog($place) : false;
-                            $existingStatus = $hasCallAction ? $this->getExistingCallLogStatus($place) : null;
+                            $showSaveButton = $this->provider !== 'divar'
+                                && $this->saveResultSetKey !== null
+                                && $savePlaceId !== null;
                             ?>
                             <div class="result-item<?= $hasImage ? ' has-image' : '' ?><?= $isSaved ? ' is-saved' : '' ?>">
                                 <?php if ($hasImage): ?>
@@ -838,7 +822,7 @@ final class SearchView
                                     </div>
 
                                     <div class="result-actions">
-                                        <?php if ($this->saveResultSetKey !== null && $savePlaceId !== null): ?>
+                                        <?php if ($showSaveButton): ?>
                                             <div class="save-place-action">
                                                 <button type="button"
                                                         class="save-place-btn<?= $isSaved ? ' is-saved' : '' ?>"
@@ -848,6 +832,12 @@ final class SearchView
                                                         <?= $isSaved ? 'disabled aria-disabled="true"' : '' ?>>
                                                     <span class="spinner"></span>
                                                     <span class="btn-text"><?= $isSaved ? '✅ ذخیره شده' : 'ذخیره این اقامتگاه' ?></span>
+                                                </button>
+                                            </div>
+                                        <?php elseif ($this->provider === 'divar' && $isSaved): ?>
+                                            <div class="save-place-action">
+                                                <button type="button" class="save-place-btn is-saved" disabled aria-disabled="true">
+                                                    <span class="btn-text">✅ ذخیره شده</span>
                                                 </button>
                                             </div>
                                         <?php endif; ?>
@@ -870,33 +860,7 @@ final class SearchView
                                             </a>
                                         <?php endif; ?>
 
-                                        <?php if ($hasCallAction): ?>
-                                            <div class="call-action">
-                                                <?php if ($hasExistingLog): ?>
-                                                    <button type="button" class="call-btn call-btn-saved" disabled>
-                                                            <span class="btn-text">
-                                                                <?php
-                                                                $statusLabel = $existingStatus === 'completed' ? '✅ تکمیل شده' :
-                                                                        ($existingStatus === 'cancelled' ? '❌ لغو شده' : '⏳ در انتظار');
-                                                                echo $statusLabel;
-                                                                ?>
-                                                            </span>
-                                                    </button>
-                                                <?php else: ?>
-                                                    <button type="button" class="call-btn"
-                                                            data-place-id="<?= htmlspecialchars($placeId) ?>"
-                                                            data-phone="<?= htmlspecialchars($phone) ?>"
-                                                            data-name="<?= htmlspecialchars($place['name']) ?>"
-                                                            data-city="<?= htmlspecialchars($this->selectedCity) ?>"
-                                                            data-category="<?= htmlspecialchars($this->selectedCategory) ?>">
-                                                        <span class="spinner"></span>
-                                                        <span class="btn-text">📞 تماس و ثبت</span>
-                                                    </button>
-                                                <?php endif; ?>
-                                            </div>
-                                        <?php endif; ?>
-
-                                        <?php if ($this->provider === 'divar' && !$hasPhone && $placeId): ?>
+                                        <?php if ($this->provider === 'divar' && !$isSaved && $placeId): ?>
                                             <div class="divar-phone-action">
                                                 <button type="button" class="divar-phone-btn"
                                                         data-place-id="<?= htmlspecialchars($placeId) ?>"
@@ -1432,6 +1396,53 @@ final class SearchView
                     saveButton.setAttribute('aria-disabled', 'true');
                 }
 
+                function revealStoredDivarPhone(resultItem, phone) {
+                    if (!resultItem || !phone) return;
+
+                    resultItem.classList.add('is-saved');
+
+                    let phoneValue = resultItem.querySelector('.phone-value');
+                    if (phoneValue) {
+                        phoneValue.textContent = phone;
+                    } else {
+                        const meta = resultItem.querySelector('.result-meta');
+                        if (meta) {
+                            const row = document.createElement('div');
+                            row.className = 'meta-row';
+
+                            const icon = document.createElement('i');
+                            icon.textContent = '📞';
+                            row.appendChild(icon);
+
+                            const label = document.createElement('span');
+                            label.className = 'label';
+                            label.textContent = 'تلفن:';
+                            row.appendChild(label);
+
+                            phoneValue = document.createElement('span');
+                            phoneValue.className = 'value phone-value';
+                            phoneValue.textContent = phone;
+                            row.appendChild(phoneValue);
+                            meta.appendChild(row);
+                        }
+                    }
+
+                    const action = resultItem.querySelector('.divar-phone-action');
+                    if (!action) return;
+
+                    const wrapper = document.createElement('div');
+                    wrapper.className = 'save-place-action';
+
+                    const stored = document.createElement('button');
+                    stored.type = 'button';
+                    stored.className = 'save-place-btn is-saved';
+                    stored.disabled = true;
+                    stored.setAttribute('aria-disabled', 'true');
+                    stored.innerHTML = '<span class="btn-text">✅ ذخیره شده</span>';
+                    wrapper.appendChild(stored);
+                    action.replaceWith(wrapper);
+                }
+
                 // Save the selected accommodation for any provider.
                 const savePlaceButtons = document.querySelectorAll('.save-place-btn:not(:disabled)');
                 savePlaceButtons.forEach(btn => {
@@ -1474,65 +1485,6 @@ final class SearchView
                                 this.disabled = false;
                                 alert('خطا در ارتباط با سرور هنگام ذخیره اقامتگاه');
                                 console.error('Selected-place save error:', error);
-                            });
-                    });
-                });
-
-                // Handle call button clicks
-                const callButtons = document.querySelectorAll('.call-btn');
-                callButtons.forEach(btn => {
-                    btn.addEventListener('click', function() {
-                        const placeId = this.dataset.placeId;
-                        const phone = this.dataset.phone;
-                        const name = this.dataset.name;
-                        const city = this.dataset.city;
-                        const category = this.dataset.category;
-
-                        if (!placeId) {
-                            alert('شناسه مکان یافت نشد');
-                            return;
-                        }
-
-                        // Auto-generate description from place info
-                        const description = `تماس با ${name} (${category}) در ${city} - شماره: ${phone}`;
-
-                        // Disable button and show loading
-                        this.classList.add('loading');
-                        this.disabled = true;
-
-                        // Send AJAX request
-                        const formData = new FormData();
-                        formData.append('action', 'call');
-                        formData.append('place_id', placeId);
-                        formData.append('phone', phone);
-                        formData.append('city', city);
-                        formData.append('category', category);
-                        formData.append('description', description);
-
-                        fetch('', {
-                            method: 'POST',
-                            body: formData
-                        })
-                            .then(response => response.json())
-                            .then(data => {
-                                this.classList.remove('loading');
-                                this.disabled = false;
-
-                                if (data.success) {
-                                    alert('تماس با موفقیت ثبت شد (وضعیت: در انتظار)');
-                                    // Update button to show it's been logged
-                                    this.innerHTML = '<span class="btn-text">✅ ثبت شده</span>';
-                                    this.style.background = '#27ae60';
-                                    this.disabled = true;
-                                } else {
-                                    alert(data.message || 'خطا در ثبت تماس');
-                                }
-                            })
-                            .catch(error => {
-                                this.classList.remove('loading');
-                                this.disabled = false;
-                                alert('خطا در ارتباط با سرور');
-                                console.error('Call log error:', error);
                             });
                     });
                 });
@@ -1649,6 +1601,10 @@ final class SearchView
                 const divarPhoneFailureMessage = 'وارد سایت دیوار شوید و کپجا را حل کنیدتا دسترسی شما باز شود';
 
                 function fetchDivarPhone(btn) {
+                    if (!btn || btn.dataset.fetched === '1') {
+                        return;
+                    }
+
                     const placeId = btn.dataset.placeId;
                     btn.classList.add('loading');
                     btn.disabled = true;
@@ -1662,12 +1618,9 @@ final class SearchView
                         .then(r => r.json())
                         .then(data => {
                             btn.classList.remove('loading');
-                            if (data.success) {
-                                markResultAsSaved(btn);
-                                const wrapper = document.createElement('div');
-                                wrapper.className = 'divar-phone-result';
-                                wrapper.innerHTML = '📞 ' + data.phone_number;
-                                btn.parentNode.replaceChild(wrapper, btn);
+                            if (data.success && data.phone_number) {
+                                btn.dataset.fetched = '1';
+                                revealStoredDivarPhone(btn.closest('.result-item'), data.phone_number);
                             } else if (data.authentication_required && !data.phone_fetch_failed) {
                                 pendingPlaceButton = btn;
                                 btn.disabled = false;

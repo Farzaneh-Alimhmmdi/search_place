@@ -74,13 +74,16 @@
 - This rule ensures consistency, quality, and alignment with project objectives
 - Changes should be submitted for review with clear documentation of what and why
 
-### 12. Call Tracking
-- When a user clicks the "call" button on a place result, the action must be logged
-- Call logs must store: place_id, phone_number, city, category, timestamp, IP address, and user agent
-- Database table `call_logs` must be used for storing call records
-- Call logging should occur immediately when the action is triggered
-- All call data must be sanitized before database insertion
-- Logs should be recorded for auditing and analytics purposes
+### 12. Saving instead of call tracking
+- Search providers must not write to `call_logs`. Saving the accommodation
+  (and its contact phone) is enough
+- Balad, Neshan and Google Maps keep a single **Save this accommodation**
+  button
+- Divar keeps a single **دریافت شماره تماس** button. After a successful fetch
+  the phone is stored and the card is shown as **ذخیره شده**; the fetch button
+  must not come back
+- If a Divar ad is already in `accommodations` with a contact phone, search
+  must show that phone in the result and must not render the fetch button
 
 ### 13. Divar Collection Page (`/divar_collect`)
 - The selection inputs must stay identical to the Divar search page: province,
