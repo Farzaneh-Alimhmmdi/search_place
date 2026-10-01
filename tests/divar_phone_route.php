@@ -46,6 +46,7 @@ namespace {
         'search' => 200,
         'search_stored' => 200,
         'saved' => 200,
+        'payload_phone' => 200,
         'already_stored' => 200,
         'new_schema' => 200,
         'db_failure' => 500,
@@ -99,6 +100,17 @@ namespace {
                     ['external_id' => 'test-token', 'phone' => '09123456789'],
                 ];
             }
+            break;
+        case 'payload_phone':
+            $GLOBALS['divar_response'] = json_encode([
+                'widget_list' => [[
+                    'widget_type' => 'UNEXPANDABLE_ROW',
+                    'data' => [
+                        'title' => 'شماره موبایل',
+                        'action' => ['payload' => ['phone_number' => '۰۹۱۲۳۴۵۶۷۸۹']],
+                    ],
+                ]],
+            ], JSON_UNESCAPED_UNICODE);
             break;
         case 'already_stored':
             unset($_SESSION['divar_cookies']);

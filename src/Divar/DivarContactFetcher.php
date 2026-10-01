@@ -65,8 +65,7 @@ final class DivarContactFetcher
             return ['success' => false, 'error' => 'Authentication expired'];
         }
 
-        // Parse phone from widget structure
-        $phone = $this->extractPhoneFromResponse($data);
+        $phone = DivarPhoneParser::parse(is_array($data) ? $data : []);
 
         return [
             'success' => true,
@@ -76,37 +75,6 @@ final class DivarContactFetcher
             'contact_count' => $data['contact_count'] ?? 0,
             'raw' => $data
         ];
-    }
-
-    /**
-     * Extract phone number from Divar's widget_list response.
-     * The API returns widgets, not a direct phone field.
-     */
-    private function extractPhoneFromResponse(array $data): ?string
-    {
-        $widgetList = $data['widget_list'] ?? [];
-        
-        foreach ($widgetList as $widget) {
-            if (($widget['widget_type'] ?? '') === 'UNEXPANDABLE_ROW') {
-                $widgetData = $widget['data'] ?? [];
-                
-                // Try action.payload.phone_number first (clean English digits)
-                if (isset($widgetData['action']['payload']['phone_number'])) {
-                    return $widgetData['action']['payload']['phone_number'];
-                }
-                
-                // Fallback to data.value (may have Persian digits)
-                if (isset($widgetData['value'])) {
-                    $value = $widgetData['value'];
-                    // Convert Persian digits to English
-                    $persianDigits = ['۰','۱','۲','۳','۴','۵','۶','۷','۸','۹'];
-                    $englishDigits = ['0','1','2','3','4','5','6','7','8','9'];
-                    return str_replace($persianDigits, $englishDigits, $value);
-                }
-            }
-        }
-        
-        return null;
     }
 
     /**

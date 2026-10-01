@@ -739,6 +739,7 @@ final class SearchView
                             $showSaveButton = $this->provider !== 'divar'
                                 && $this->saveResultSetKey !== null
                                 && $savePlaceId !== null;
+                            $hasStoredDivarPhone = $this->provider === 'divar' && $isSaved && $hasPhone;
                             ?>
                             <div class="result-item<?= $hasImage ? ' has-image' : '' ?><?= $isSaved ? ' is-saved' : '' ?>">
                                 <?php if ($hasImage): ?>
@@ -834,7 +835,7 @@ final class SearchView
                                                     <span class="btn-text"><?= $isSaved ? '✅ ذخیره شده' : 'ذخیره این اقامتگاه' ?></span>
                                                 </button>
                                             </div>
-                                        <?php elseif ($this->provider === 'divar' && $isSaved): ?>
+                                        <?php elseif ($hasStoredDivarPhone): ?>
                                             <div class="save-place-action">
                                                 <button type="button" class="save-place-btn is-saved" disabled aria-disabled="true">
                                                     <span class="btn-text">✅ ذخیره شده</span>
@@ -860,7 +861,7 @@ final class SearchView
                                             </a>
                                         <?php endif; ?>
 
-                                        <?php if ($this->provider === 'divar' && !$isSaved && $placeId): ?>
+                                        <?php if ($this->provider === 'divar' && !$hasStoredDivarPhone && $placeId): ?>
                                             <div class="divar-phone-action">
                                                 <button type="button" class="divar-phone-btn"
                                                         data-place-id="<?= htmlspecialchars($placeId) ?>"

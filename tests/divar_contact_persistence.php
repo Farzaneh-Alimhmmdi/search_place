@@ -4,6 +4,7 @@ require __DIR__ . '/bootstrap.php';
 
 use Src\Divar\AccommodationRepository;
 use Src\Divar\DivarAdMapper;
+use Src\Divar\DivarPhoneParser;
 use Src\Divar\DivarSearchAdStore;
 
 $failures = 0;
@@ -121,6 +122,31 @@ $tests['contact, listing and commit failures roll back instead of partially savi
             expectSame(false, $pdo->inTransaction(), 'No open transaction after failure');
         }
     }
+};
+
+$tests['phone parser accepts payload, hamza-free title and nested widgets'] = static function (): void {
+    expectSame('09123456789', DivarPhoneParser::parse([
+        'widget_list' => [[
+            'widget_type' => 'UNEXPANDABLE_ROW',
+            'data' => ['title' => 'شمارهٔ موبایل', 'value' => '09123456789'],
+        ]],
+    ]), 'Original title+value shape');
+    expectSame('09123456789', DivarPhoneParser::parse([
+        'widget_list' => [[
+            'widget_type' => 'UNEXPANDABLE_ROW',
+            'data' => [
+                'title' => 'شماره موبایل',
+                'action' => ['payload' => ['phone_number' => '۰۹۱۲۳۴۵۶۷۸۹']],
+            ],
+        ]],
+    ]), 'Payload phone with Persian digits');
+    expectSame('09123456789', DivarPhoneParser::parse([
+        'page' => ['widget_list' => [[
+            'widget_type' => 'UNEXPANDABLE_ROW',
+            'data' => ['title' => 'تلفن', 'value' => '+98 912 345 6789'],
+        ]]],
+    ]), 'Nested widget list');
+    expectSame(null, DivarPhoneParser::parse(['widget_list' => []]), 'Empty widgets');
 };
 
 $tests['stored phone lookup uses the unique listing key and skips empty ids'] = static function (): void {

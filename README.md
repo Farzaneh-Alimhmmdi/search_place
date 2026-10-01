@@ -95,6 +95,9 @@ number without calling Divar.
   «وارد سایت دیوار شوید و کپجا را حل کنیدتا دسترسی شما باز شود».
   These provider failures show the message instead of reopening the OTP modal;
   the initial login flow and database-save error messages remain unchanged.
+- Phone fetch steps and failures are written to `storage/logs/divar_phone.log`
+  (and `storage/logs/app.log`) at the project root, not under `public/`.
+  Cookie values are never stored. Use that file when a number does not appear.
 
 ### Indexes for the stored-phone lookup
 No extra index was added. The current page's tokens (typically 24) are looked

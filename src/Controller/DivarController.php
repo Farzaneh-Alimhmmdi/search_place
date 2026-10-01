@@ -10,6 +10,7 @@ use Src\Support\Schema;
 use Src\Support\SelectedPlaceService;
 use Src\Http\CurlHttpClient;
 use Src\Divar\AccommodationRepository;
+use Src\Divar\DivarPhoneParser;
 use Src\Divar\DivarSearchAdStore;
 use Src\Divar\DivarClient;
 use Src\Divar\DivarSearchService;
@@ -1210,7 +1211,7 @@ final class DivarController
         try {
             $this->hydrateStoredDivarResults($places);
         } catch (\Throwable $e) {
-            Logger::warning('Could not check saved Divar places', [
+            $this->logPhoneIssue('WARNING', 'Could not check saved Divar places', [
                 'error' => $e->getMessage(),
             ]);
         }
@@ -1296,12 +1297,17 @@ final class DivarController
             bin2hex(substr($data, 10, 6))
         );
     }
+    private function logPhoneIssue(string $level, string $message, array $context = []): void
+    {
+        Logger::issue('divar_phone', $level, $message, $context);
+    }
+
     private function lookupStoredDivarPhone(string $placeId): ?string
     {
         try {
             return (new AccommodationRepository())->findStoredPhone('divar', $placeId);
         } catch (\Throwable $e) {
-            Logger::warning('Could not look up stored Divar phone', [
+            $this->logPhoneIssue('WARNING', 'Could not look up stored Divar phone', [
                 'place_id' => $placeId,
                 'error' => $e->getMessage(),
             ]);
@@ -1318,7 +1324,12 @@ final class DivarController
             ? trim($_POST['place_id'])
             : '';
 
+        $this->logPhoneIssue('INFO', 'get_phone started', [
+            'place_id' => $placeId === '' ? null : $placeId,
+        ]);
+
         if ($placeId === '') {
+            $this->logPhoneIssue('WARNING', 'get_phone missing place_id', []);
             http_response_code(400);
 
             echo json_encode([
@@ -1332,6 +1343,10 @@ final class DivarController
         $storedPhone = $this->lookupStoredDivarPhone($placeId);
 
         if ($storedPhone !== null) {
+            $this->logPhoneIssue('INFO', 'get_phone reused stored phone', [
+                'place_id' => $placeId,
+            ]);
+
             echo json_encode([
                 'success' => true,
                 'already_saved' => true,
@@ -1345,11 +1360,14 @@ final class DivarController
          * Get Divar cookies from the current session.
          */
         $cookies = DivarCookieManager::getCookies();
-        error_log(
-            'DIVAR COOKIE NAMES: ' .
-            implode(', ', array_keys($cookies))
-        );
+        $this->logPhoneIssue('INFO', 'get_phone session cookies', [
+            'place_id' => $placeId,
+            'cookie_names' => array_keys($cookies),
+        ]);
         if (empty($cookies)) {
+            $this->logPhoneIssue('WARNING', 'get_phone not authenticated', [
+                'place_id' => $placeId,
+            ]);
             http_response_code(401);
 
             echo json_encode([
@@ -1364,6 +1382,9 @@ final class DivarController
         $ad = DivarSearchAdStore::find($placeId);
 
         if ($ad === null) {
+            $this->logPhoneIssue('WARNING', 'get_phone missing search snapshot', [
+                'place_id' => $placeId,
+            ]);
             http_response_code(409);
 
             echo json_encode([
@@ -1490,18 +1511,23 @@ final class DivarController
 
         curl_close($ch);
 
+        $this->logPhoneIssue('INFO', 'get_phone Divar HTTP', [
+            'place_id' => $placeId,
+            'http_code' => $httpCode,
+            'curl_error' => $curlError === '' ? null : $curlError,
+            'response_bytes' => is_string($response) ? strlen($response) : 0,
+        ]);
+
         /*
          * cURL error.
          */
         if ($response === false || $curlError !== '') {
 
-            Logger::error(
-                'Divar phone request cURL error',
-                [
-                    'place_id' => $placeId,
-                    'error' => $curlError
-                ]
-            );
+            $this->logPhoneIssue('ERROR', 'Divar phone request cURL error', [
+                'place_id' => $placeId,
+                'url' => $url,
+                'error' => $curlError,
+            ]);
 
             http_response_code(500);
 
@@ -1519,14 +1545,11 @@ final class DivarController
          */
         if ($httpCode === 401 || $httpCode === 403) {
 
-            Logger::error(
-                'Divar phone request authentication failed',
-                [
-                    'place_id' => $placeId,
-                    'http_code' => $httpCode,
-                    'response' => $response
-                ]
-            );
+            $this->logPhoneIssue('ERROR', 'Divar phone request authentication failed', [
+                'place_id' => $placeId,
+                'http_code' => $httpCode,
+                'response' => is_string($response) ? $response : null,
+            ]);
 
             http_response_code(401);
 
@@ -1545,14 +1568,11 @@ final class DivarController
          */
         if ($httpCode < 200 || $httpCode >= 300) {
 
-            Logger::error(
-                'Divar phone request failed',
-                [
-                    'place_id' => $placeId,
-                    'http_code' => $httpCode,
-                    'response' => $response
-                ]
-            );
+            $this->logPhoneIssue('ERROR', 'Divar phone request failed', [
+                'place_id' => $placeId,
+                'http_code' => $httpCode,
+                'response' => is_string($response) ? $response : null,
+            ]);
 
             http_response_code(
                 $httpCode > 0 ? $httpCode : 500
@@ -1580,13 +1600,11 @@ final class DivarController
             json_last_error() !== JSON_ERROR_NONE
         ) {
 
-            Logger::error(
-                'Invalid Divar phone response',
-                [
-                    'place_id' => $placeId,
-                    'response' => $response
-                ]
-            );
+            $this->logPhoneIssue('ERROR', 'Invalid Divar phone response', [
+                'place_id' => $placeId,
+                'json_error' => json_last_error_msg(),
+                'response' => is_string($response) ? $response : null,
+            ]);
 
             http_response_code(500);
 
@@ -1599,44 +1617,9 @@ final class DivarController
             return;
         }
 
-        /*
-         * Extract phone number.
-         */
-        $phoneNumber = null;
+        $phoneNumber = DivarPhoneParser::parse($result);
 
-        if (
-            isset($result['widget_list']) &&
-            is_array($result['widget_list'])
-        ) {
-
-            foreach ($result['widget_list'] as $widget) {
-
-                if (
-                    ($widget['widget_type'] ?? '') ===
-                    'UNEXPANDABLE_ROW' &&
-
-                    ($widget['data']['title'] ?? '') ===
-                    'شمارهٔ موبایل' &&
-
-                    isset($widget['data']['value'])
-                ) {
-
-                    $phoneNumber = trim(
-                        (string) $widget['data']['value']
-                    );
-
-                    break;
-                }
-            }
-        }
-
-        /*
-         * Phone found.
-         */
-        if (
-            $phoneNumber !== null &&
-            $phoneNumber !== ''
-        ) {
+        if ($phoneNumber !== null && $phoneNumber !== '') {
             try {
                 if (($_SESSION['divar_schema_ready'] ?? null) !== Schema::VERSION) {
                     Schema::ensureTables();
@@ -1645,9 +1628,10 @@ final class DivarController
 
                 (new AccommodationRepository())->upsertWithContact($ad, $phoneNumber);
             } catch (\Throwable $e) {
-                Logger::error('Divar ad/contact could not be saved', [
+                $this->logPhoneIssue('ERROR', 'Divar ad/contact could not be saved', [
                     'place_id' => $placeId,
                     'exception' => get_class($e),
+                    'error' => $e->getMessage(),
                     'code' => $e->getCode(),
                 ]);
 
@@ -1661,6 +1645,11 @@ final class DivarController
                 return;
             }
 
+            $this->logPhoneIssue('INFO', 'get_phone stored number', [
+                'place_id' => $placeId,
+                'http_code' => $httpCode,
+            ]);
+
             echo json_encode([
                 'success' => true,
                 'already_saved' => true,
@@ -1670,16 +1659,12 @@ final class DivarController
             return;
         }
 
-        /*
-         * Phone wasn't found.
-         */
-        Logger::error(
-            'Divar phone number not found',
-            [
-                'place_id' => $placeId,
-                'response' => $response
-            ]
-        );
+        $this->logPhoneIssue('ERROR', 'Divar phone number not found in response', [
+            'place_id' => $placeId,
+            'http_code' => $httpCode,
+            'widgets' => DivarPhoneParser::widgetSummary($result),
+            'response' => is_string($response) ? $response : null,
+        ]);
 
         http_response_code(404);
 
