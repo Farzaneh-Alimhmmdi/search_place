@@ -7,7 +7,10 @@ use Src\Support\Db;
 use Src\Support\Logger;
 use Src\Http\CurlHttpClient;
 use Src\Balad\BaladClient;
+use Src\Balad\BaladPlaceMapper;
 use Src\Balad\BaladSearchService;
+use Src\Divar\AccommodationRepository;
+use Src\Support\Schema;
 use Src\View\SearchView;
 
 final class BaladController
@@ -113,15 +116,110 @@ final class BaladController
                     $this->results = $result['success'] ? $result : null;
                     $this->error = $result['success'] ? null : ($result['error'] ?? 'خطای ناشناخته');
 
-                    // Fetch existing call logs for these results
-                    if ($this->results && !empty($this->results['places'])) {
-                        $this->loadExistingCallLogs();
+                    if ($this->results) {
+                        // Store only the page already fetched for this search. The
+                        // normal Balad search and pagination flow stays unchanged.
+                        $this->storeSearchResults($citySlug);
+
+                        // Call-log data is optional for rendering the places; a
+                        // missing call_logs table must not prevent their storage.
+                        if (!empty($this->results['places'])) {
+                            try {
+                                $this->loadExistingCallLogs();
+                            } catch (\Throwable $e) {
+                                Logger::warning('Could not load Balad call logs', [
+                                    'error' => $e->getMessage(),
+                                ]);
+                            }
+                        }
                     }
                 } catch (\Exception $e) {
                     Logger::error('Search failed', ['error' => $e->getMessage()]);
                     $this->error = $this->selectedCategory .'در' .$this->selectedCity . ' یافت نشد';
                 }
             }
+        }
+    }
+
+    /**
+     * Persist this successful Balad result page in the shared accommodations table.
+     * Repeated searches are safe because the repository upserts by provider and ID.
+     */
+    private function storeSearchResults(string $citySlug): void
+    {
+        $places = $this->results['places'] ?? [];
+
+        if (!is_array($places) || $places === []) {
+            return;
+        }
+
+        try {
+            $changes = Schema::ensureTables();
+
+            if ($changes !== []) {
+                Logger::info('Balad search: schema updated', ['changes' => $changes]);
+            }
+
+            $rows = BaladPlaceMapper::toRows($places, [
+                'city' => $this->selectedCity,
+                'city_slug' => $citySlug,
+                'category' => $this->selectedCategory,
+                'page' => $this->currentPage,
+            ]);
+
+            if ($rows === []) {
+                Logger::warning('Balad results had no storable place IDs', [
+                    'city' => $this->selectedCity,
+                    'category' => $this->selectedCategory,
+                    'page' => $this->currentPage,
+                    'place_count' => count($places),
+                ]);
+                $this->error = 'نتایج بلد نمایش داده شد، اما شناسه‌ای برای ذخیره‌سازی ' .
+                    'در پایگاه داده پیدا نشد.';
+
+                return;
+            }
+
+            $saveResult = (new AccommodationRepository())->upsertMany($rows);
+            $skipped = max(0, count($places) - count($rows));
+
+            if (!$saveResult['ok'] || $saveResult['failed'] > 0 || $skipped > 0) {
+                Logger::warning('Balad results were only partially stored', [
+                    'city' => $this->selectedCity,
+                    'category' => $this->selectedCategory,
+                    'page' => $this->currentPage,
+                    'places' => count($places),
+                    'saved_rows' => $saveResult['ok']
+                        ? max(0, count($rows) - $saveResult['failed'])
+                        : 0,
+                    'failed_rows' => $saveResult['failed'],
+                    'skipped_rows' => $skipped,
+                    'error' => $saveResult['error'],
+                ]);
+                $this->error = 'نتایج بلد نمایش داده شد، اما ذخیره‌سازی همه مکان‌ها ' .
+                    'در پایگاه داده کامل نشد.';
+
+                return;
+            }
+
+            Logger::info('Balad search results stored', [
+                'city' => $this->selectedCity,
+                'category' => $this->selectedCategory,
+                'page' => $this->currentPage,
+                'count' => count($rows),
+                'inserted' => $saveResult['inserted'],
+                'updated' => $saveResult['updated'],
+                'unchanged' => $saveResult['unchanged'],
+            ]);
+        } catch (\Throwable $e) {
+            Logger::error('Could not store Balad search results', [
+                'city' => $this->selectedCity,
+                'category' => $this->selectedCategory,
+                'page' => $this->currentPage,
+                'error' => $e->getMessage(),
+            ]);
+            $this->error = 'نتایج بلد نمایش داده شد، اما ذخیره اطلاعات ' .
+                'در پایگاه داده ناموفق بود.';
         }
     }
 

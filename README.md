@@ -52,7 +52,12 @@ The project follows a clean architecture pattern with separate components for:
 1. User selects city and category via form submission
 2. Controller processes the request and calls the service
 3. Service uses client to make API calls
-4. Results are passed back to controller and rendered by view
+4. After a successful Balad search, the current results page is upserted into
+   `accommodations` (`provider = 'balad'`, `external_id =` the Balad place token).
+   Repeated searches update the same place instead of creating duplicates; the
+   existing search and pagination flow is unchanged. Other providers keep their
+   existing behavior.
+5. Results are passed back to controller and rendered by view
 
 ## Divar Collection Page (`/divar_collect`)
 A second Divar page whose only job is to **fetch everything and store it in the
@@ -132,8 +137,9 @@ explicitly instead of silently falling back to Tehran.
 
 ## Database Schema
 `database/schema.sql` is the single source of truth and is applied
-automatically on the first request (`Src\Support\Schema::ensureTables()`), so no
-manual migration is required. Every statement uses `CREATE TABLE IF NOT EXISTS`,
+automatically before Balad results are stored or a Divar collection starts
+(`Src\Support\Schema::ensureTables()`), so no manual migration is required.
+Every statement uses `CREATE TABLE IF NOT EXISTS`,
 therefore the file can also be applied by hand as often as you like:
 
 ```
@@ -144,13 +150,14 @@ There are exactly two tables:
 
 - `contacts`: phone numbers, unique per phone (`uq_contacts_phone`). Filled by a
   later step, not by the collector.
-- `accommodations`: the collected listings.
+- `accommodations`: stored provider places/listings. Balad search results are
+  upserted page-by-page; Divar collection continues to harvest its full result
+  set in batches.
   - `contact_id`: nullable FK to `contacts` (`ON DELETE SET NULL`)
-  - `(provider, external_id)`: unique; for Divar `external_id` is the ad token
-  - `provider_data` (JSON): Divar specific fields (price text, descriptions,
-    image, `web_info`) plus harvest metadata (job id, page, query, city id,
-    timestamp)
-  - `raw_data` (JSON): the complete raw payload of the ad
+  - `(provider, external_id)`: unique; the value is the provider's place/ad ID
+  - `provider_data` (JSON): provider-specific fields and search/harvest context
+    that do not have dedicated columns
+  - `raw_data` (JSON): the complete raw provider payload for the stored place/ad
   - `latitude` / `longitude` / `price` are nullable and are **never overwritten
     with NULL** by a re-run of the collector
 
