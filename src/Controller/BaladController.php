@@ -7,11 +7,8 @@ use Src\Support\Db;
 use Src\Support\Logger;
 use Src\Http\CurlHttpClient;
 use Src\Balad\BaladClient;
-use Src\Balad\BaladContactRepository;
-use Src\Balad\BaladPlaceMapper;
 use Src\Balad\BaladSearchService;
-use Src\Divar\AccommodationRepository;
-use Src\Support\Schema;
+use Src\Support\SelectedPlaceService;
 use Src\View\SearchView;
 
 final class BaladController
@@ -28,7 +25,8 @@ final class BaladController
     private string $selectedCategory = 'guest-house';
     private ?array $results = null;
     private ?string $error = null;
-    private ?string $baladResultSetKey = null;
+    private ?string $saveResultSetKey = null;
+    private array $savedPlaceIds = [];
 
     public function run(): void
     {
@@ -130,201 +128,62 @@ final class BaladController
     }
 
     /**
-     * Cache the current page server-side so a save action can only select a
-     * place that was actually returned to this user's Balad search.
+     * Cache this Balad page and mark rows already present in accommodations.
      */
     private function cacheSearchResults(string $citySlug): void
     {
-        $this->baladResultSetKey = null;
-
-        if (session_status() === PHP_SESSION_NONE && !headers_sent()) {
-            session_start();
-        }
-
-        if (session_status() !== PHP_SESSION_ACTIVE) {
-            return;
-        }
-
-        $places = $this->results['places'] ?? [];
-
-        if (!is_array($places) || $places === []) {
-            return;
-        }
-
-        $placesById = [];
-
-        foreach ($places as $place) {
-            if (!is_array($place)) {
-                continue;
-            }
-
-            $externalId = BaladPlaceMapper::externalId($place);
-
-            if ($externalId !== null) {
-                $placesById[$externalId] = $place;
-            }
-        }
-
-        if ($placesById === []) {
-            return;
-        }
-
-        try {
-            $key = bin2hex(random_bytes(16));
-        } catch (\Throwable $e) {
-            Logger::warning('Could not create Balad result selection key', [
-                'error' => $e->getMessage(),
-            ]);
-
-            return;
-        }
-
-        $now = time();
-        $sets = $_SESSION['balad_search_result_sets'] ?? [];
-        $sets = is_array($sets) ? $sets : [];
-
-        foreach ($sets as $existingKey => $set) {
-            if (!is_array($set) || (int) ($set['expires_at'] ?? 0) < $now) {
-                unset($sets[$existingKey]);
-            }
-        }
-
-        $sets[$key] = [
-            'expires_at' => $now + 1800,
-            'context' => [
-                'city' => $this->selectedCity,
-                'city_slug' => $citySlug,
-                'category' => $this->selectedCategory,
-                'page' => $this->currentPage,
-            ],
-            'places' => $placesById,
+        $places = is_array($this->results['places'] ?? null)
+            ? $this->results['places']
+            : [];
+        $context = [
+            'city' => $this->selectedCity,
+            'city_slug' => $citySlug,
+            'category' => $this->selectedCategory,
+            'page' => $this->currentPage,
         ];
 
-        while (count($sets) > 5) {
-            $oldestKey = array_key_first($sets);
+        $this->saveResultSetKey = SelectedPlaceService::remember('balad', $places, $context);
 
-            if ($oldestKey === null) {
-                break;
-            }
-
-            unset($sets[$oldestKey]);
-        }
-
-        $_SESSION['balad_search_result_sets'] = $sets;
-        $this->baladResultSetKey = $key;
-    }
-
-    /**
-     * Save only the place explicitly selected from the current Balad results.
-     */
-    private function saveSelectedPlace(): void
-    {
-        if (session_status() === PHP_SESSION_NONE && !headers_sent()) {
-            session_start();
-        }
-
-        $key = $_POST['result_set_key'] ?? null;
-        $placeId = $_POST['place_id'] ?? null;
-
-        if (
-            session_status() !== PHP_SESSION_ACTIVE ||
-            !is_string($key) || preg_match('/^[a-f0-9]{32}$/i', $key) !== 1 ||
-            !is_string($placeId) || $placeId === '' || strlen($placeId) > 1024
-        ) {
-            $this->sendJsonResponse([
-                'success' => false,
-                'message' => 'درخواست ذخیره‌سازی مکان نامعتبر است.',
-            ], 400);
-        }
-
-        $set = $_SESSION['balad_search_result_sets'][$key] ?? null;
-
-        if (
-            !is_array($set) ||
-            (int) ($set['expires_at'] ?? 0) < time() ||
-            !is_array($set['places'] ?? null)
-        ) {
-            $this->sendJsonResponse([
-                'success' => false,
-                'message' => 'نتیجه جستجو منقضی شده است؛ دوباره جستجو کنید.',
-            ], 410);
-        }
-
-        $place = $set['places'][$placeId] ?? null;
-        $context = is_array($set['context'] ?? null) ? $set['context'] : [];
-
-        if (!is_array($place)) {
-            $this->sendJsonResponse([
-                'success' => false,
-                'message' => 'مکان انتخاب‌شده در نتایج این جستجو نیست.',
-            ], 404);
-        }
-
-        if (session_status() === PHP_SESSION_ACTIVE) {
-            session_write_close();
+        if ($places === []) {
+            return;
         }
 
         try {
-            Db::connect(
-                Config::get('db_host', '127.0.0.1'),
-                Config::get('db_port', 3306),
-                Config::get('db_database', 'search_place'),
-                Config::get('db_username', 'root'),
-                Config::get('db_password', '')
-            );
-            Schema::ensureTables();
-
-            $row = BaladPlaceMapper::toRow($place, $context);
-
-            if ($row === null) {
-                $this->sendJsonResponse([
-                    'success' => false,
-                    'message' => 'شناسه مکان برای ذخیره‌سازی معتبر نیست.',
-                ], 422);
-            }
-
-            $phone = BaladPlaceMapper::contactPhone($place);
-
-            if ($phone !== null) {
-                $row['contact_id'] = (new BaladContactRepository())->findOrCreate($phone);
-            }
-
-            $saveResult = (new AccommodationRepository())->upsertMany([$row]);
-
-            if (!$saveResult['ok'] || $saveResult['failed'] > 0) {
-                Logger::error('Could not save selected Balad place', [
-                    'external_id' => $row['external_id'],
-                    'error' => $saveResult['error'],
-                ]);
-                $this->sendJsonResponse([
-                    'success' => false,
-                    'message' => 'ذخیره مکان انتخاب‌شده در پایگاه داده ناموفق بود.',
-                ], 500);
-            }
-
-            Logger::info('Selected Balad place stored', [
-                'external_id' => $row['external_id'],
-                'contact_saved' => $phone !== null,
-                'inserted' => $saveResult['inserted'],
-                'updated' => $saveResult['updated'],
-                'unchanged' => $saveResult['unchanged'],
-            ]);
-
-            $this->sendJsonResponse([
-                'success' => true,
-                'message' => 'اقامتگاه انتخاب‌شده با موفقیت ذخیره شد.',
-                'contact_saved' => $phone !== null,
-            ]);
+            $this->connectDatabase();
+            $this->savedPlaceIds = SelectedPlaceService::savedIds('balad', $places);
         } catch (\Throwable $e) {
-            Logger::error('Could not save selected Balad place', [
-                'place_id' => $placeId,
+            Logger::warning('Could not check saved Balad places', [
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function saveSelectedPlace(): void
+    {
+        try {
+            $this->connectDatabase();
+        } catch (\Throwable $e) {
+            Logger::error('Could not connect to save selected Balad place', [
                 'error' => $e->getMessage(),
             ]);
             $this->sendJsonResponse([
                 'success' => false,
-                'message' => 'ذخیره مکان انتخاب‌شده در پایگاه داده ناموفق بود.',
+                'message' => 'اتصال به پایگاه داده برای ذخیره اقامتگاه ناموفق بود.',
             ], 500);
         }
+
+        SelectedPlaceAction::handle('balad');
+    }
+
+    private function connectDatabase(): void
+    {
+        Db::connect(
+            Config::get('db_host', '127.0.0.1'),
+            Config::get('db_port', 3306),
+            Config::get('db_database', 'search_place'),
+            Config::get('db_username', 'root'),
+            Config::get('db_password', '')
+        );
     }
 
     /** @param array<string,mixed> $payload */
@@ -357,7 +216,8 @@ final class BaladController
             $this->currentPage,
             $this->results['page_count'] ?? 1,
             0, // totalResults is used by Divar pagination only
-            $this->baladResultSetKey
+            $this->saveResultSetKey,
+            $this->savedPlaceIds
         );
         $view->render();
     }

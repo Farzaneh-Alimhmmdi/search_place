@@ -2,7 +2,7 @@
 
 namespace Src\View;
 
-use Src\Balad\BaladPlaceMapper;
+use Src\Support\ProviderAccommodationMapper;
 
 final class SearchView
 {
@@ -22,7 +22,8 @@ final class SearchView
     private int $currentPage = 1;
     private int $totalPages = 1;
     private int $totalResults = 0;
-    private ?string $baladResultSetKey = null;
+    private ?string $saveResultSetKey = null;
+    private array $savedPlaceIds = [];
 
     public function __construct(
             array $provinces,
@@ -40,7 +41,8 @@ final class SearchView
             int $currentPage = 1,
             int $totalPages = 1,
             int $totalResults = 0,
-            ?string $baladResultSetKey = null
+            ?string $saveResultSetKey = null,
+            array $savedPlaceIds = []
     ) {
         $this->provinces = $provinces;
         $this->categories = $categories;
@@ -57,7 +59,8 @@ final class SearchView
         $this->currentPage = max(1, $currentPage);
         $this->totalPages = max(1, $totalPages);
         $this->totalResults = $totalResults;
-        $this->baladResultSetKey = $baladResultSetKey;
+        $this->saveResultSetKey = $saveResultSetKey;
+        $this->savedPlaceIds = $savedPlaceIds;
     }
 
     public function setExistingCallLogs(array $logs): void
@@ -373,9 +376,15 @@ final class SearchView
                 }
                 .call-btn.call-btn-saved .btn-text { opacity: 1; }
 
-                /* Balad selected-place save button */
-                .balad-save-action { width: 100%; }
-                .balad-save-btn {
+                /* Saved accommodation state, shared by all providers */
+                .result-item.is-saved {
+                    background: #eaf7ee;
+                    border-color: #27ae60;
+                    box-shadow: 0 3px 12px rgba(39, 174, 96, 0.16);
+                }
+                .result-item.is-saved .result-content { background: #eaf7ee; }
+                .save-place-action { width: 100%; }
+                .save-place-btn {
                     width: 100%;
                     background: linear-gradient(135deg, #27ae60 0%, #219a52 100%);
                     color: #fff;
@@ -391,13 +400,16 @@ final class SearchView
                     gap: 8px;
                     transition: all 0.2s ease;
                 }
-                .balad-save-btn:hover:not(:disabled) { transform: translateY(-1px); }
-                .balad-save-btn:disabled {
-                    background: linear-gradient(135deg, #27ae60 0%, #219a52 100%);
+                .save-place-btn:hover:not(:disabled) { transform: translateY(-1px); }
+                .save-place-btn:disabled {
                     cursor: not-allowed;
-                    opacity: 0.82;
+                    opacity: 0.78;
                 }
-                .balad-save-btn .spinner {
+                .save-place-btn.is-saved {
+                    background: linear-gradient(135deg, #238b4c 0%, #1d743f 100%);
+                    opacity: 1;
+                }
+                .save-place-btn .spinner {
                     display: none;
                     width: 16px;
                     height: 16px;
@@ -406,7 +418,7 @@ final class SearchView
                     border-radius: 50%;
                     animation: spin 0.8s linear infinite;
                 }
-                .balad-save-btn.loading .spinner { display: block; }
+                .save-place-btn.loading .spinner { display: block; }
 
                 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -738,14 +750,13 @@ final class SearchView
                             $phone = $place['telephone'] ?? ($place['phone'] ?? null);
                             $hasPhone = !empty($phone) && $phone !== '---';
                             $placeId = $place['id'] ?? $place['token'] ?? $place['place_id'] ?? '';
-                            $baladSavePlaceId = $this->provider === 'balad'
-                                    ? BaladPlaceMapper::externalId($place)
-                                    : null;
+                            $savePlaceId = ProviderAccommodationMapper::externalId($this->provider, $place);
+                            $isSaved = $savePlaceId !== null && isset($this->savedPlaceIds[$savePlaceId]);
                             $hasCallAction = $this->provider !== 'balad' && $hasPhone;
                             $hasExistingLog = $hasCallAction ? $this->hasExistingCallLog($place) : false;
                             $existingStatus = $hasCallAction ? $this->getExistingCallLogStatus($place) : null;
                             ?>
-                            <div class="result-item <?= $hasImage ? 'has-image' : '' ?>">
+                            <div class="result-item<?= $hasImage ? ' has-image' : '' ?><?= $isSaved ? ' is-saved' : '' ?>">
                                 <?php if ($hasImage): ?>
                                     <img src="<?= htmlspecialchars($place['image_preview']) ?>"
                                          alt="<?= htmlspecialchars($place['name']) ?>"
@@ -827,13 +838,16 @@ final class SearchView
                                     </div>
 
                                     <div class="result-actions">
-                                        <?php if ($this->provider === 'balad' && $this->baladResultSetKey !== null && $baladSavePlaceId !== null): ?>
-                                            <div class="balad-save-action">
-                                                <button type="button" class="balad-save-btn"
-                                                        data-place-id="<?= htmlspecialchars($baladSavePlaceId, ENT_QUOTES, 'UTF-8') ?>"
-                                                        data-result-set-key="<?= htmlspecialchars($this->baladResultSetKey, ENT_QUOTES, 'UTF-8') ?>">
+                                        <?php if ($this->saveResultSetKey !== null && $savePlaceId !== null): ?>
+                                            <div class="save-place-action">
+                                                <button type="button"
+                                                        class="save-place-btn<?= $isSaved ? ' is-saved' : '' ?>"
+                                                        data-place-id="<?= htmlspecialchars($savePlaceId, ENT_QUOTES, 'UTF-8') ?>"
+                                                        data-result-set-key="<?= htmlspecialchars($this->saveResultSetKey, ENT_QUOTES, 'UTF-8') ?>"
+                                                        data-provider="<?= htmlspecialchars($this->provider, ENT_QUOTES, 'UTF-8') ?>"
+                                                        <?= $isSaved ? 'disabled aria-disabled="true"' : '' ?>>
                                                     <span class="spinner"></span>
-                                                    <span class="btn-text">ذخیره این اقامتگاه</span>
+                                                    <span class="btn-text"><?= $isSaved ? '✅ ذخیره شده' : 'ذخیره این اقامتگاه' ?></span>
                                                 </button>
                                             </div>
                                         <?php endif; ?>
@@ -1403,12 +1417,28 @@ final class SearchView
                     updateCities(provinceSelect.value);
                 }
 
-                // Save only the Balad place whose save button the user selects.
-                const baladSaveButtons = document.querySelectorAll('.balad-save-btn');
-                baladSaveButtons.forEach(btn => {
+                function markResultAsSaved(element) {
+                    const resultItem = element.closest('.result-item');
+                    if (!resultItem) return;
+
+                    resultItem.classList.add('is-saved');
+                    const saveButton = resultItem.querySelector('.save-place-btn');
+                    if (!saveButton) return;
+
+                    saveButton.classList.remove('loading');
+                    saveButton.classList.add('is-saved');
+                    saveButton.innerHTML = '<span class="btn-text">✅ ذخیره شده</span>';
+                    saveButton.disabled = true;
+                    saveButton.setAttribute('aria-disabled', 'true');
+                }
+
+                // Save the selected accommodation for any provider.
+                const savePlaceButtons = document.querySelectorAll('.save-place-btn:not(:disabled)');
+                savePlaceButtons.forEach(btn => {
                     btn.addEventListener('click', function() {
                         const formData = new FormData();
                         formData.append('action', 'save_place');
+                        formData.append('provider', this.dataset.provider || '');
                         formData.append('place_id', this.dataset.placeId || '');
                         formData.append('result_set_key', this.dataset.resultSetKey || '');
 
@@ -1424,23 +1454,26 @@ final class SearchView
                                 this.classList.remove('loading');
 
                                 if (response.ok && data.success) {
-                                    this.classList.add('saved');
-                                    this.innerHTML = '<span class="btn-text">✅ اقامتگاه ذخیره شد</span>';
-                                    this.disabled = true;
+                                    markResultAsSaved(this);
                                     alert(data.contact_saved
-                                        ? 'اقامتگاه انتخاب‌شده و شماره تماس آن ذخیره شد.'
-                                        : (data.message || 'اقامتگاه انتخاب‌شده ذخیره شد.'));
+                                        ? 'اقامتگاه و شماره تماس آن ذخیره شد.'
+                                        : (data.message || 'اقامتگاه ذخیره شد.'));
+                                    return;
+                                }
+
+                                if (data.already_saved) {
+                                    markResultAsSaved(this);
                                     return;
                                 }
 
                                 this.disabled = false;
-                                alert(data.message || 'خطا در ذخیره مکان انتخاب‌شده');
+                                alert(data.message || 'خطا در ذخیره اقامتگاه');
                             })
                             .catch(error => {
                                 this.classList.remove('loading');
                                 this.disabled = false;
-                                alert('خطا در ارتباط با سرور هنگام ذخیره مکان');
-                                console.error('Balad place save error:', error);
+                                alert('خطا در ارتباط با سرور هنگام ذخیره اقامتگاه');
+                                console.error('Selected-place save error:', error);
                             });
                     });
                 });
@@ -1630,6 +1663,7 @@ final class SearchView
                         .then(data => {
                             btn.classList.remove('loading');
                             if (data.success) {
+                                markResultAsSaved(btn);
                                 const wrapper = document.createElement('div');
                                 wrapper.className = 'divar-phone-result';
                                 wrapper.innerHTML = '📞 ' + data.phone_number;

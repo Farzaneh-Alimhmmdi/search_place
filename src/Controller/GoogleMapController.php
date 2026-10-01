@@ -5,6 +5,7 @@ namespace Src\Controller;
 use Src\Support\Config;
 use Src\Support\Db;
 use Src\Support\Logger;
+use Src\Support\SelectedPlaceService;
 use Src\Http\CurlHttpClient;
 use Src\GoogleMap\GoogleMapClient;
 use Src\GoogleMap\GoogleMapSearchService;
@@ -25,6 +26,8 @@ final class GoogleMapController
     private ?array $results = null;
     private ?string $error = null;
     private array $existingCallLogs = [];
+    private ?string $saveResultSetKey = null;
+    private array $savedPlaceIds = [];
 
     public function run(): void
     {
@@ -82,6 +85,10 @@ final class GoogleMapController
         $this->existingCallLogs = [];
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            if (($_POST['action'] ?? '') === 'save_place') {
+                SelectedPlaceAction::handle('google_map');
+            }
+
             // Handle call logging (AJAX)
             if (isset($_POST['action']) && $_POST['action'] === 'call' && isset($_POST['place_id'])) {
                 $this->logCall(
@@ -115,8 +122,9 @@ final class GoogleMapController
                     $this->results = $result['success'] ? $result : null;
                     $this->error = $result['success'] ? null : ($result['error'] ?? 'خطای ناشناخته');
 
-                    // Fetch existing call logs for these results
+                    // Cache the displayed page for explicit selected saves and mark persisted rows.
                     if ($this->results && !empty($this->results['places'])) {
+                        $this->prepareSaveState($citySlug);
                         $this->loadExistingCallLogs();
                     }
                 } catch (\Exception $e) {
@@ -124,6 +132,29 @@ final class GoogleMapController
                     $this->error = $this->selectedCategory .'در' .$this->selectedCity . ' یافت نشد';
                 }
             }
+        }
+    }
+
+    private function prepareSaveState(string $citySlug): void
+    {
+        $places = is_array($this->results['places'] ?? null)
+            ? $this->results['places']
+            : [];
+        $context = [
+            'city' => $this->selectedCity,
+            'city_slug' => $citySlug,
+            'category' => $this->selectedCategory,
+            'page' => 1,
+        ];
+
+        $this->saveResultSetKey = SelectedPlaceService::remember('google_map', $places, $context);
+
+        try {
+            $this->savedPlaceIds = SelectedPlaceService::savedIds('google_map', $places);
+        } catch (\Throwable $e) {
+            Logger::warning('Could not check saved Google Maps places', [
+                'error' => $e->getMessage(),
+            ]);
         }
     }
 
@@ -198,7 +229,13 @@ final class GoogleMapController
             'google_map',
             '', // selectedProvince
             [], // provinceCities
-            []  // allProvinceCities
+            [], // allProvinceCities
+            '', // selectedQuery
+            1, // currentPage
+            $this->results['page_count'] ?? 1,
+            $this->results['total'] ?? 0,
+            $this->saveResultSetKey,
+            $this->savedPlaceIds
         );
         // Pass existing call logs to view
         $view->setExistingCallLogs($this->existingCallLogs);
