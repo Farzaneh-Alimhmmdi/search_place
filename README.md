@@ -54,8 +54,8 @@ The project follows a clean architecture pattern with separate components for:
 3. Service uses client to make API calls
 4. Search results are rendered and paginated without automatically saving all
    returned places.
-5. When the user clicks **Save this place** on a Balad result, only that place is
-   upserted into `accommodations` (`provider = 'balad'`, `external_id` is the
+5. When the user clicks **Save this accommodation** on a Balad result, only
+   that place is upserted into `accommodations` (`provider = 'balad'`, `external_id` is the
    Balad place token). Its first valid phone is normalized and upserted into
    `contacts`, and `accommodations.contact_id` links to that contact. The full
    source telephone value remains in provider JSON. Repeated saves reuse contacts
@@ -180,8 +180,8 @@ explicitly instead of silently falling back to Tehran.
 
 ## Database Schema
 `database/schema.sql` is the single source of truth and is applied
-automatically before Balad call logs are read/saved, a selected Balad place is
-saved, or a Divar collection starts (`Src\Support\Schema::ensureTables()`),
+automatically before a selected Balad place is saved or a Divar collection
+starts (`Src\Support\Schema::ensureTables()`),
 so no manual migration is required.
 Every statement uses `CREATE TABLE IF NOT EXISTS`,
 therefore the file can also be applied by hand as often as you like:
@@ -208,7 +208,8 @@ There are three application tables (the Divar collector itself still writes only
   - `latitude` / `longitude` / `price` are nullable and are **never overwritten
     with NULL** by a re-run of the collector
 - `call_logs`: click-to-call records and their `pending` / `completed` /
-  `cancelled` status. This is separate from the Divar collection flow.
+  `cancelled` status for providers that enable call tracking. Balad uses the
+  save action only and does not create call-log records.
 
 Requires MySQL 5.7+ / MariaDB 10.2+ (JSON column type). On very old InnoDB
 setups that reject a full length index on `title` (error 1071), `Schema`
@@ -231,8 +232,8 @@ Configuration files include:
 - `.env`: Environment variables for database and application settings
 
 ## Call Tracking
-When a user clicks the "call" button on a place result, the action is logged to the database:
-- Call data is stored in the `call_logs` table
+Call tracking remains available for non-Balad providers that show a call button. Balad results use the save action and do not create `call_logs` records.
+- Call data for supported providers is stored in the `call_logs` table
 - Information stored includes: place ID, phone number, city, category, timestamp, IP address, and user agent
 - Database connection is configured via the `.env` file
 - All call data is sanitized before database insertion for security

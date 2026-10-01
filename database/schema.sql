@@ -9,8 +9,8 @@
 --                      valid available number while Divar phone collection remains
 --                      a later step
 --   accommodations  -> collected provider places/listings
---   call_logs       -> call-button actions and their status (not used by the
---                      Divar collector; collection state remains in session)
+--   call_logs       -> click-to-call status for providers with call tracking;
+--                      Balad uses the save action only
 --
 -- The file is idempotent: every statement uses CREATE TABLE IF NOT EXISTS,
 -- so it is safe to run as many times as you want.

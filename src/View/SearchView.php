@@ -377,7 +377,7 @@ final class SearchView
                 .balad-save-action { width: 100%; }
                 .balad-save-btn {
                     width: 100%;
-                    background: linear-gradient(135deg, #5966d8 0%, #4352bd 100%);
+                    background: linear-gradient(135deg, #27ae60 0%, #219a52 100%);
                     color: #fff;
                     border: none;
                     padding: 12px 20px;
@@ -392,7 +392,11 @@ final class SearchView
                     transition: all 0.2s ease;
                 }
                 .balad-save-btn:hover:not(:disabled) { transform: translateY(-1px); }
-                .balad-save-btn:disabled { background: #95a5a6; cursor: not-allowed; }
+                .balad-save-btn:disabled {
+                    background: linear-gradient(135deg, #27ae60 0%, #219a52 100%);
+                    cursor: not-allowed;
+                    opacity: 0.82;
+                }
                 .balad-save-btn .spinner {
                     display: none;
                     width: 16px;
@@ -737,8 +741,9 @@ final class SearchView
                             $baladSavePlaceId = $this->provider === 'balad'
                                     ? BaladPlaceMapper::externalId($place)
                                     : null;
-                            $hasExistingLog = $hasPhone ? $this->hasExistingCallLog($place) : false;
-                            $existingStatus = $hasPhone ? $this->getExistingCallLogStatus($place) : null;
+                            $hasCallAction = $this->provider !== 'balad' && $hasPhone;
+                            $hasExistingLog = $hasCallAction ? $this->hasExistingCallLog($place) : false;
+                            $existingStatus = $hasCallAction ? $this->getExistingCallLogStatus($place) : null;
                             ?>
                             <div class="result-item <?= $hasImage ? 'has-image' : '' ?>">
                                 <?php if ($hasImage): ?>
@@ -828,7 +833,7 @@ final class SearchView
                                                         data-place-id="<?= htmlspecialchars($baladSavePlaceId, ENT_QUOTES, 'UTF-8') ?>"
                                                         data-result-set-key="<?= htmlspecialchars($this->baladResultSetKey, ENT_QUOTES, 'UTF-8') ?>">
                                                     <span class="spinner"></span>
-                                                    <span class="btn-text">⭐ ذخیره این مکان</span>
+                                                    <span class="btn-text">ذخیره این اقامتگاه</span>
                                                 </button>
                                             </div>
                                         <?php endif; ?>
@@ -851,7 +856,7 @@ final class SearchView
                                             </a>
                                         <?php endif; ?>
 
-                                        <?php if ($hasPhone): ?>
+                                        <?php if ($hasCallAction): ?>
                                             <div class="call-action">
                                                 <?php if ($hasExistingLog): ?>
                                                     <button type="button" class="call-btn call-btn-saved" disabled>
@@ -1420,11 +1425,11 @@ final class SearchView
 
                                 if (response.ok && data.success) {
                                     this.classList.add('saved');
-                                    this.innerHTML = '<span class="btn-text">✅ این مکان ذخیره شد</span>';
+                                    this.innerHTML = '<span class="btn-text">✅ اقامتگاه ذخیره شد</span>';
                                     this.disabled = true;
                                     alert(data.contact_saved
-                                        ? 'مکان انتخاب‌شده و شماره تماس آن ذخیره شد.'
-                                        : (data.message || 'مکان انتخاب‌شده ذخیره شد.'));
+                                        ? 'اقامتگاه انتخاب‌شده و شماره تماس آن ذخیره شد.'
+                                        : (data.message || 'اقامتگاه انتخاب‌شده ذخیره شد.'));
                                     return;
                                 }
 

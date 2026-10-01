@@ -33,13 +33,6 @@ final class BaladController
     public function run(): void
     {
         Config::load(__DIR__ . '/../../config/balad.php');
-        Db::connect(
-            Config::get('db_host', '127.0.0.1'),
-            Config::get('db_port', 3306),
-            Config::get('db_database', 'search_place'),
-            Config::get('db_username', 'root'),
-            Config::get('db_password', '')
-        );
         Logger::setPath(Config::get('log_path', 'storage/logs'));
 
         $this->initHttp();
@@ -95,30 +88,11 @@ final class BaladController
                 return;
             }
 
-            // Handle call logging (AJAX)
-            if (isset($_POST['action']) && $_POST['action'] === 'call' && isset($_POST['place_id'])) {
-                try {
-                    // Call tracking uses its own table and never writes to the
-                    // Divar collector's accommodations data.
-                    $this->logCall(
-                        $_POST['place_id'] ?? '',
-                        $_POST['phone'] ?? '',
-                        $_POST['city'] ?? $this->selectedCity ?? '',
-                        $_POST['category'] ?? $this->selectedCategory ?? '',
-                        $_POST['description'] ?? ''
-                    );
-                } catch (\Throwable $e) {
-                    Logger::error('Balad call logging failed', ['error' => $e->getMessage()]);
-                    http_response_code(500);
-                    header('Content-Type: application/json; charset=utf-8');
-                    echo json_encode([
-                        'success' => false,
-                        'message' => 'ثبت تماس در پایگاه داده ناموفق بود.',
-                    ]);
-                    exit;
-                }
-
-                return; // Exit early for AJAX call
+            if (($_POST['action'] ?? '') === 'call') {
+                $this->sendJsonResponse([
+                    'success' => false,
+                    'message' => 'ثبت تماس برای نتایج بلد غیرفعال است.',
+                ], 410);
             }
 
             if ($this->selectedCity) {
@@ -146,27 +120,6 @@ final class BaladController
                         // Cache this page in the session so only an explicitly
                         // selected result can be saved later.
                         $this->cacheSearchResults($citySlug);
-
-                        // Schema preparation does not save places. Keep it
-                        // separate from call-status loading so one failure does
-                        // not prevent the existing status lookup from running.
-                        if (!empty($this->results['places'])) {
-                            try {
-                                Schema::ensureTables();
-                            } catch (\Throwable $e) {
-                                Logger::warning('Could not prepare Balad result schema', [
-                                    'error' => $e->getMessage(),
-                                ]);
-                            }
-
-                            try {
-                                $this->loadExistingCallLogs();
-                            } catch (\Throwable $e) {
-                                Logger::warning('Could not load Balad call logs', [
-                                    'error' => $e->getMessage(),
-                                ]);
-                            }
-                        }
                     }
                 } catch (\Exception $e) {
                     Logger::error('Search failed', ['error' => $e->getMessage()]);
@@ -312,6 +265,13 @@ final class BaladController
         }
 
         try {
+            Db::connect(
+                Config::get('db_host', '127.0.0.1'),
+                Config::get('db_port', 3306),
+                Config::get('db_database', 'search_place'),
+                Config::get('db_username', 'root'),
+                Config::get('db_password', '')
+            );
             Schema::ensureTables();
 
             $row = BaladPlaceMapper::toRow($place, $context);
@@ -352,7 +312,7 @@ final class BaladController
 
             $this->sendJsonResponse([
                 'success' => true,
-                'message' => 'مکان انتخاب‌شده با موفقیت ذخیره شد.',
+                'message' => 'اقامتگاه انتخاب‌شده با موفقیت ذخیره شد.',
                 'contact_saved' => $phone !== null,
             ]);
         } catch (\Throwable $e) {
@@ -379,64 +339,6 @@ final class BaladController
         exit;
     }
 
-    private function loadExistingCallLogs(): void
-    {
-        $placeIds = [];
-        foreach ($this->results['places'] as $place) {
-            $id = $place['id'] ?? $place['token'] ?? $place['place_id'] ?? null;
-            if ($id) {
-                $placeIds[] = $id;
-            }
-        }
-
-        if (empty($placeIds)) return;
-
-        $placeholders = implode(',', array_fill(0, count($placeIds), '?'));
-        $query = "SELECT place_id, phone_number, status FROM call_logs WHERE place_id IN ($placeholders)";
-        $stmt = Db::getConnection()->prepare($query);
-        $stmt->execute($placeIds);
-        $logs = $stmt->fetchAll(\PDO::FETCH_ASSOC);
-
-        // Create a lookup map: place_id -> phone_number -> status
-        $this->existingCallLogs = [];
-        foreach ($logs as $log) {
-            $this->existingCallLogs[$log['place_id']][$log['phone_number']] = $log['status'];
-        }
-    }
-
-    private function logCall(string $placeId, string $phone, string $city, string $category, string $description = ''): void
-    {
-        $ipAddress = $_SERVER['REMOTE_ADDR'] ?? '';
-        $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? '';
-
-        // Use INSERT IGNORE to prevent duplicates, or check first
-        $checkQuery = "SELECT id, status FROM call_logs WHERE place_id = ? AND phone_number = ?";
-        $checkStmt = Db::getConnection()->prepare($checkQuery);
-        $checkStmt->execute([$placeId, $phone]);
-        $existing = $checkStmt->fetch();
-
-        if ($existing) {
-            // Already exists
-            header('Content-Type: application/json');
-            echo json_encode([
-                'success' => true, 
-                'message' => 'Call already logged',
-                'already_exists' => true,
-                'status' => $existing['status']
-            ]);
-            exit;
-        }
-
-        $query = "INSERT INTO call_logs (place_id, phone_number, city, category, description, status, ip_address, user_agent) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)";
-        $stmt = Db::getConnection()->prepare($query);
-        $stmt->execute([$placeId, $phone, $city, $category, $description, $ipAddress, $userAgent]);
-
-        // Return JSON response for AJAX
-        header('Content-Type: application/json');
-        echo json_encode(['success' => true, 'message' => 'Call logged successfully']);
-        exit;
-    }
-
     private function render(): void
     {
         $view = new SearchView(
@@ -457,8 +359,6 @@ final class BaladController
             0, // totalResults is used by Divar pagination only
             $this->baladResultSetKey
         );
-        // Pass existing call logs to view
-        $view->setExistingCallLogs($this->existingCallLogs ?? []);
         $view->render();
     }
 }
