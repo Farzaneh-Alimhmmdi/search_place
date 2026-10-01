@@ -16,6 +16,9 @@ use Src\View\SearchView;
 
 final class DivarController
 {
+    private const PHONE_FETCH_FAILURE_MESSAGE =
+        'وارد سایت دیوار شوید و کپجا را حل کنیدتا دسترسی شما باز شود';
+
     private CurlHttpClient $http;
     private DivarClient $client;
     private ?DivarSearchService $service = null;
@@ -1456,7 +1459,8 @@ final class DivarController
 
             echo json_encode([
                 'success' => false,
-                'message' => 'cURL error: ' . $curlError
+                'phone_fetch_failed' => true,
+                'message' => self::PHONE_FETCH_FAILURE_MESSAGE
             ], JSON_UNESCAPED_UNICODE);
 
             return;
@@ -1481,7 +1485,8 @@ final class DivarController
             echo json_encode([
                 'success' => false,
                 'authentication_required' => true,
-                'message' => 'Divar authentication has expired. Please login again.'
+                'phone_fetch_failed' => true,
+                'message' => self::PHONE_FETCH_FAILURE_MESSAGE
             ], JSON_UNESCAPED_UNICODE);
 
             return;
@@ -1507,8 +1512,8 @@ final class DivarController
 
             echo json_encode([
                 'success' => false,
-                'message' => 'Divar returned HTTP ' . $httpCode,
-                'response' => $response
+                'phone_fetch_failed' => true,
+                'message' => self::PHONE_FETCH_FAILURE_MESSAGE
             ], JSON_UNESCAPED_UNICODE);
 
             return;
@@ -1539,7 +1544,8 @@ final class DivarController
 
             echo json_encode([
                 'success' => false,
-                'message' => 'Invalid JSON response from Divar'
+                'phone_fetch_failed' => true,
+                'message' => self::PHONE_FETCH_FAILURE_MESSAGE
             ], JSON_UNESCAPED_UNICODE);
 
             return;
@@ -1630,7 +1636,8 @@ final class DivarController
 
         echo json_encode([
             'success' => false,
-            'message' => 'Phone number not found in Divar response'
+            'phone_fetch_failed' => true,
+            'message' => self::PHONE_FETCH_FAILURE_MESSAGE
         ], JSON_UNESCAPED_UNICODE);
     }
 

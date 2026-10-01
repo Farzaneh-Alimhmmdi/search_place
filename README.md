@@ -73,6 +73,11 @@ its contact after Divar successfully returns a phone number:
   the existing `Schema::ensureTables()` mechanism.
 - Unknown/expired ad snapshots ask the user to repeat the search. The session
   retains up to 240 recently viewed ads, rather than an entire result set.
+- Failed Divar phone requests (including authentication/access failures,
+  network errors, invalid responses, or no phone in the response) display:
+  «وارد سایت دیوار شوید و کپجا را حل کنیدتا دسترسی شما باز شود».
+  These provider failures show the message instead of reopening the OTP modal;
+  the initial login flow and database-save error messages remain unchanged.
 
 This does not change `/divar_collect`: that page still collects ads without
 fetching phone numbers, and later collector reruns preserve `contact_id`.

@@ -16,19 +16,19 @@ namespace Src\Controller {
         return new \stdClass();
     }
     function curl_setopt(object $handle, int $option, mixed $value): bool { return true; }
-    function curl_exec(object $handle): string { return $GLOBALS['divar_response']; }
+    function curl_exec(object $handle): string|false { return $GLOBALS['divar_response']; }
     function curl_getinfo(object $handle, ?int $option = null): int|array
     {
         return $option === null ? ['http_code' => $GLOBALS['divar_status']] : $GLOBALS['divar_status'];
     }
-    function curl_error(object $handle): string { return ''; }
+    function curl_error(object $handle): string { return $GLOBALS['divar_error'] ?? ''; }
     function curl_close(object $handle): void {}
 }
 
 namespace Src\Divar {
     function curl_init(string $url): object { return \Src\Controller\curl_init($url); }
     function curl_setopt_array(object $handle, array $options): bool { return true; }
-    function curl_exec(object $handle): string { return \Src\Controller\curl_exec($handle); }
+    function curl_exec(object $handle): string|false { return \Src\Controller\curl_exec($handle); }
     function curl_errno(object $handle): int { return 0; }
     function curl_getinfo(object $handle, ?int $option = null): int|array { return \Src\Controller\curl_getinfo($handle, $option); }
     function curl_error(object $handle): string { return ''; }
@@ -51,6 +51,11 @@ namespace {
         'no_phone' => 404,
         'unauthenticated' => 401,
         'expired_auth' => 401,
+        'captcha_blocked' => 401,
+        'rate_limited' => 429,
+        'server_error' => 503,
+        'invalid_response' => 500,
+        'transport_error' => 500,
         'unknown_ad' => 409,
         'missing_id' => 400,
         'malformed_id' => 400,
@@ -106,6 +111,22 @@ namespace {
         case 'expired_auth':
             $GLOBALS['divar_status'] = 401;
             break;
+        case 'captcha_blocked':
+            $GLOBALS['divar_status'] = 403;
+            break;
+        case 'rate_limited':
+            $GLOBALS['divar_status'] = 429;
+            break;
+        case 'server_error':
+            $GLOBALS['divar_status'] = 503;
+            break;
+        case 'invalid_response':
+            $GLOBALS['divar_response'] = '<html>Captcha required</html>';
+            break;
+        case 'transport_error':
+            $GLOBALS['divar_response'] = false;
+            $GLOBALS['divar_error'] = 'Simulated connection failure';
+            break;
         case 'unknown_ad':
             $_POST['place_id'] = 'unknown-token';
             // Browser-supplied listing fields must never become a DB row.
@@ -130,6 +151,11 @@ namespace {
                 expectSame('temporary-rent', $stored['category'], 'Search category');
                 expectSame(null, $stored['contact_id'], 'Search does not collect phones');
                 expectSame(true, str_contains($body, 'data-place-id="test-token"'), 'Phone button is rendered');
+                expectSame(true, str_contains($body,
+                    "const divarPhoneFailureMessage = 'وارد سایت دیوار شوید و کپجا را حل کنیدتا دسترسی شما باز شود';"),
+                    'Frontend failure fallback uses the requested message');
+                expectSame(true, str_contains($body, 'data.authentication_required && !data.phone_fetch_failed'),
+                    'Provider failures display the message instead of reopening the OTP modal');
                 expectSame([], $GLOBALS['test_pdo']->events, 'Search alone starts no DB transaction');
                 expectSame(['https://api.divar.ir/v8/postlist/w/search'], $GLOBALS['divar_requests'], 'One search page');
                 echo "PASS: Divar search remembers the listing for get_phone\n";
@@ -139,6 +165,23 @@ namespace {
             $response = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
             expectSame($statuses[$scenario], http_response_code() ?: 200, 'HTTP status');
             expectSame($statuses[$scenario] === 200, $response['success'], 'JSON success');
+
+            $fetchFailed = in_array($scenario, ['no_phone', 'expired_auth', 'captcha_blocked',
+                'rate_limited', 'server_error', 'invalid_response', 'transport_error'], true);
+            expectSame($fetchFailed, $response['phone_fetch_failed'] ?? false, 'Provider failure flag');
+            if ($fetchFailed) {
+                expectSame('وارد سایت دیوار شوید و کپجا را حل کنیدتا دسترسی شما باز شود',
+                    $response['message'], 'Exact phone-fetch failure message');
+                expectSame(false, isset($response['response']), 'Do not expose the raw Divar error response');
+            }
+            if ($scenario === 'unauthenticated') {
+                expectSame(true, $response['authentication_required'], 'Initial OTP login is unchanged');
+            }
+            if (in_array($scenario, ['db_failure', 'schema_failure'], true)) {
+                expectSame('شماره تماس دریافت شد، اما ذخیره آگهی و مخاطب ناموفق بود. لطفاً دوباره تلاش کنید.',
+                    $response['message'], 'Persistence errors keep their specific message');
+            }
+
             $pdo = $GLOBALS['test_pdo'];
             $writes = array_values(array_filter($pdo->executions,
                 static fn (array $execution): bool => str_starts_with($execution['sql'], 'INSERT INTO')));
