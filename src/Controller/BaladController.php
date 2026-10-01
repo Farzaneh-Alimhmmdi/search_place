@@ -8,6 +8,7 @@ use Src\Support\Logger;
 use Src\Http\CurlHttpClient;
 use Src\Balad\BaladClient;
 use Src\Balad\BaladSearchService;
+use Src\Support\SelectedPlaceService;
 use Src\View\SearchView;
 
 final class BaladController
@@ -24,22 +25,22 @@ final class BaladController
     private string $selectedCategory = 'guest-house';
     private ?array $results = null;
     private ?string $error = null;
+    private ?string $saveResultSetKey = null;
+    private array $savedPlaceIds = [];
 
     public function run(): void
     {
         Config::load(__DIR__ . '/../../config/balad.php');
-        Db::connect(
-            Config::get('db_host', '127.0.0.1'),
-            Config::get('db_port', 3306),
-            Config::get('db_database', 'search_place'),
-            Config::get('db_username', 'root'),
-            Config::get('db_password', '')
-        );
         Logger::setPath(Config::get('log_path', 'storage/logs'));
 
         $this->initHttp();
         $this->loadData();
         $this->handleRequest();
+
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            session_write_close();
+        }
+
         $this->render();
     }
 
@@ -80,16 +81,16 @@ final class BaladController
         $this->error = null;
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-            // Handle call logging (AJAX)
-            if (isset($_POST['action']) && $_POST['action'] === 'call' && isset($_POST['place_id'])) {
-                $this->logCall(
-                    $_POST['place_id'] ?? '',
-                    $_POST['phone'] ?? '',
-                    $_POST['city'] ?? $this->selectedCity ?? '',
-                    $_POST['category'] ?? $this->selectedCategory ?? '',
-                    $_POST['description'] ?? ''
-                );
-                return; // Exit early for AJAX call
+            if (($_POST['action'] ?? '') === 'save_place') {
+                $this->saveSelectedPlace();
+                return;
+            }
+
+            if (($_POST['action'] ?? '') === 'call') {
+                $this->sendJsonResponse([
+                    'success' => false,
+                    'message' => 'ثبت تماس برای نتایج بلد غیرفعال است.',
+                ], 410);
             }
 
             if ($this->selectedCity) {
@@ -113,9 +114,10 @@ final class BaladController
                     $this->results = $result['success'] ? $result : null;
                     $this->error = $result['success'] ? null : ($result['error'] ?? 'خطای ناشناخته');
 
-                    // Fetch existing call logs for these results
-                    if ($this->results && !empty($this->results['places'])) {
-                        $this->loadExistingCallLogs();
+                    if ($this->results) {
+                        // Cache this page in the session so only an explicitly
+                        // selected result can be saved later.
+                        $this->cacheSearchResults($citySlug);
                     }
                 } catch (\Exception $e) {
                     Logger::error('Search failed', ['error' => $e->getMessage()]);
@@ -125,61 +127,74 @@ final class BaladController
         }
     }
 
-    private function loadExistingCallLogs(): void
+    /**
+     * Cache this Balad page and mark rows already present in accommodations.
+     */
+    private function cacheSearchResults(string $citySlug): void
     {
-        $placeIds = [];
-        foreach ($this->results['places'] as $place) {
-            $id = $place['id'] ?? $place['token'] ?? $place['place_id'] ?? null;
-            if ($id) {
-                $placeIds[] = $id;
-            }
+        $places = is_array($this->results['places'] ?? null)
+            ? $this->results['places']
+            : [];
+        $context = [
+            'city' => $this->selectedCity,
+            'city_slug' => $citySlug,
+            'category' => $this->selectedCategory,
+            'page' => $this->currentPage,
+        ];
+
+        $this->saveResultSetKey = SelectedPlaceService::remember('balad', $places, $context);
+
+        if ($places === []) {
+            return;
         }
 
-        if (empty($placeIds)) return;
-
-        $placeholders = implode(',', array_fill(0, count($placeIds), '?'));
-        $query = "SELECT place_id, phone_number, status FROM call_logs WHERE place_id IN ($placeholders)";
-        $stmt = Db::getConnection()->prepare($query);
-        $stmt->execute($placeIds);
-        $logs = $stmt->fetchAll(\PDO::FETCH_ASSOC);
-
-        // Create a lookup map: place_id -> phone_number -> status
-        $this->existingCallLogs = [];
-        foreach ($logs as $log) {
-            $this->existingCallLogs[$log['place_id']][$log['phone_number']] = $log['status'];
+        try {
+            $this->connectDatabase();
+            $this->savedPlaceIds = SelectedPlaceService::savedIds('balad', $places);
+        } catch (\Throwable $e) {
+            Logger::warning('Could not check saved Balad places', [
+                'error' => $e->getMessage(),
+            ]);
         }
     }
 
-    private function logCall(string $placeId, string $phone, string $city, string $category, string $description = ''): void
+    private function saveSelectedPlace(): void
     {
-        $ipAddress = $_SERVER['REMOTE_ADDR'] ?? '';
-        $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? '';
-
-        // Use INSERT IGNORE to prevent duplicates, or check first
-        $checkQuery = "SELECT id, status FROM call_logs WHERE place_id = ? AND phone_number = ?";
-        $checkStmt = Db::getConnection()->prepare($checkQuery);
-        $checkStmt->execute([$placeId, $phone]);
-        $existing = $checkStmt->fetch();
-
-        if ($existing) {
-            // Already exists
-            header('Content-Type: application/json');
-            echo json_encode([
-                'success' => true, 
-                'message' => 'Call already logged',
-                'already_exists' => true,
-                'status' => $existing['status']
+        try {
+            $this->connectDatabase();
+        } catch (\Throwable $e) {
+            Logger::error('Could not connect to save selected Balad place', [
+                'error' => $e->getMessage(),
             ]);
-            exit;
+            $this->sendJsonResponse([
+                'success' => false,
+                'message' => 'اتصال به پایگاه داده برای ذخیره اقامتگاه ناموفق بود.',
+            ], 500);
         }
 
-        $query = "INSERT INTO call_logs (place_id, phone_number, city, category, description, status, ip_address, user_agent) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)";
-        $stmt = Db::getConnection()->prepare($query);
-        $stmt->execute([$placeId, $phone, $city, $category, $description, $ipAddress, $userAgent]);
+        SelectedPlaceAction::handle('balad');
+    }
 
-        // Return JSON response for AJAX
-        header('Content-Type: application/json');
-        echo json_encode(['success' => true, 'message' => 'Call logged successfully']);
+    private function connectDatabase(): void
+    {
+        Db::connect(
+            Config::get('db_host', '127.0.0.1'),
+            Config::get('db_port', 3306),
+            Config::get('db_database', 'search_place'),
+            Config::get('db_username', 'root'),
+            Config::get('db_password', '')
+        );
+    }
+
+    /** @param array<string,mixed> $payload */
+    private function sendJsonResponse(array $payload, int $statusCode = 200): void
+    {
+        http_response_code($statusCode);
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(
+            $payload,
+            JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE
+        );
         exit;
     }
 
@@ -199,10 +214,11 @@ final class BaladController
             [],  // allProvinceCities
             '', // selectedQuery
             $this->currentPage,
-            $this->results['page_count'] ?? 1
+            $this->results['page_count'] ?? 1,
+            0, // totalResults is used by Divar pagination only
+            $this->saveResultSetKey,
+            $this->savedPlaceIds
         );
-        // Pass existing call logs to view
-        $view->setExistingCallLogs($this->existingCallLogs ?? []);
         $view->render();
     }
 }

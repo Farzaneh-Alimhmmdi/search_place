@@ -148,6 +148,8 @@ final class BaladClient
                     : null,
                 'rating'       => $rating,
                 'instagram_id' => $instagramId,
+                // Keep the complete API item available for database persistence.
+                'raw'          => $item,
             ];
         }
 

@@ -39,7 +39,7 @@ final class Schema
      * invalidates that cache so an updated schema is applied immediately
      * instead of after the user clears their session.
      */
-    public const VERSION = '2';
+    public const VERSION = '3';
 
     /**
      * MySQL error code for "Specified key was too long; max key length is N bytes".

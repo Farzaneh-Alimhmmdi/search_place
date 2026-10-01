@@ -5,6 +5,7 @@ namespace Src\Controller;
 use Src\Support\Config;
 use Src\Support\Db;
 use Src\Support\Logger;
+use Src\Support\SelectedPlaceService;
 use Src\Neshan\NeshanClient;
 use Src\Neshan\NeshanSearchService;
 use Src\View\SearchView;
@@ -27,6 +28,8 @@ final class NeshanController
     private ?string $error = null;
     private array $existingCallLogs = [];
     private int $currentPage = 1;
+    private ?string $saveResultSetKey = null;
+    private array $savedPlaceIds = [];
 
     public function run(): void
     {
@@ -74,6 +77,10 @@ final class NeshanController
         $this->existingCallLogs = [];
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            if (($_POST['action'] ?? '') === 'save_place') {
+                SelectedPlaceAction::handle('neshan');
+            }
+
             // Handle call logging (AJAX)
             if (isset($_POST['action']) && $_POST['action'] === 'call' && isset($_POST['place_id'])) {
                 $this->logCall(
@@ -108,8 +115,9 @@ final class NeshanController
                     $this->results = $result['success'] ? $result : null;
                     $this->error = $result['success'] ? null : ($result['error'] ?? 'خطای ناشناخته');
 
-                    // Fetch existing call logs for these results
+                    // Cache the displayed page for explicit selected saves and mark persisted rows.
                     if ($this->results && !empty($this->results['places'])) {
+                        $this->prepareSaveState($citySlug);
                         $this->loadExistingCallLogs();
                     }
                 } catch (\Exception $e) {
@@ -117,6 +125,29 @@ final class NeshanController
                     $this->error = 'خطا در ارتباط با سرور نشان';
                 }
             }
+        }
+    }
+
+    private function prepareSaveState(string $citySlug): void
+    {
+        $places = is_array($this->results['places'] ?? null)
+            ? $this->results['places']
+            : [];
+        $context = [
+            'city' => $this->selectedCity,
+            'city_slug' => $citySlug,
+            'category' => $this->selectedCategory,
+            'page' => $this->currentPage,
+        ];
+
+        $this->saveResultSetKey = SelectedPlaceService::remember('neshan', $places, $context);
+
+        try {
+            $this->savedPlaceIds = SelectedPlaceService::savedIds('neshan', $places);
+        } catch (\Throwable $e) {
+            Logger::warning('Could not check saved Neshan places', [
+                'error' => $e->getMessage(),
+            ]);
         }
     }
 
@@ -195,7 +226,9 @@ final class NeshanController
             '', // selectedQuery
             $this->currentPage,
             $this->results['page_count'] ?? 1,
-            $this->results['total_results'] ?? 0
+            $this->results['total_results'] ?? 0,
+            $this->saveResultSetKey,
+            $this->savedPlaceIds
         );
         // Pass existing call logs to view
         $view->setExistingCallLogs($this->existingCallLogs);

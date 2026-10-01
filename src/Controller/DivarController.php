@@ -6,6 +6,7 @@ use Src\Support\Config;
 use Src\Support\Db;
 use Src\Support\Logger;
 use Src\Support\Schema;
+use Src\Support\SelectedPlaceService;
 use Src\Http\CurlHttpClient;
 use Src\Divar\AccommodationRepository;
 use Src\Divar\DivarSearchAdStore;
@@ -36,6 +37,8 @@ final class DivarController
     private ?array $results = null;
     private ?string $error = null;
     private array $existingCallLogs = [];
+    private ?string $saveResultSetKey = null;
+    private array $savedPlaceIds = [];
 
     public function run(): void
     {
@@ -628,6 +631,10 @@ final class DivarController
         $this->existingCallLogs = [];
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            if (($_POST['action'] ?? '') === 'save_place') {
+                SelectedPlaceAction::handle('divar');
+            }
+
             // Handle call logging (AJAX)
             if (isset($_POST['action']) && $_POST['action'] === 'call' && isset($_POST['place_id'])) {
                 $this->logCall(
@@ -1036,6 +1043,7 @@ final class DivarController
                                 $this->results &&
                                 !empty($this->results['places'])
                             ) {
+                                $this->prepareSaveState($citySlug, $requestedPage);
                                 $this->loadExistingCallLogs();
                             }
 
@@ -1187,6 +1195,31 @@ final class DivarController
             'cookie_names' => array_keys($cookies)
         ], JSON_UNESCAPED_UNICODE);
     }
+    private function prepareSaveState(string $citySlug, int $page): void
+    {
+        $places = is_array($this->results['places'] ?? null)
+            ? $this->results['places']
+            : [];
+        $context = [
+            'province' => $this->selectedProvince,
+            'city' => $this->selectedCity,
+            'city_slug' => $citySlug,
+            'category' => $this->selectedCategory,
+            'query' => $this->selectedQuery,
+            'page' => $page,
+        ];
+
+        $this->saveResultSetKey = SelectedPlaceService::remember('divar', $places, $context);
+
+        try {
+            $this->savedPlaceIds = SelectedPlaceService::savedIds('divar', $places);
+        } catch (\Throwable $e) {
+            Logger::warning('Could not check saved Divar places', [
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
     private function loadExistingCallLogs(): void
     {
         $placeIds = [];
@@ -1952,7 +1985,12 @@ final class DivarController
             $this->selectedProvince,
             $provinceCities,
             $allProvinceCities,
-            $this->selectedQuery
+            $this->selectedQuery,
+            $this->results['divar_current_page'] ?? 1,
+            $this->results['page_count'] ?? 1,
+            $this->results['total'] ?? 0,
+            $this->saveResultSetKey,
+            $this->savedPlaceIds
         );
         // Pass existing call logs to view
         $view->setExistingCallLogs($this->existingCallLogs);

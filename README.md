@@ -52,7 +52,15 @@ The project follows a clean architecture pattern with separate components for:
 1. User selects city and category via form submission
 2. Controller processes the request and calls the service
 3. Service uses client to make API calls
-4. Results are passed back to controller and rendered by view
+4. Search results are rendered and paginated without automatically saving all
+   returned places.
+5. When the user clicks **Save this accommodation** on a Balad result, only
+   that place is upserted into `accommodations` (`provider = 'balad'`, `external_id` is the
+   Balad place token). Its first valid phone is normalized and upserted into
+   `contacts`, and `accommodations.contact_id` links to that contact. The full
+   source telephone value remains in provider JSON. Repeated saves reuse contacts
+   and update the selected place instead of creating duplicates. Other providers
+   keep their existing behavior.
 
 ## Divar Phone Persistence (`/search_place`)
 When **Divar** is selected, clicking **دریافت شماره تماس** now saves the ad and
@@ -172,27 +180,36 @@ explicitly instead of silently falling back to Tehran.
 
 ## Database Schema
 `database/schema.sql` is the single source of truth and is applied
-automatically on the first request (`Src\Support\Schema::ensureTables()`), so no
-manual migration is required. Every statement uses `CREATE TABLE IF NOT EXISTS`,
+automatically before a selected Balad place is saved or a Divar collection
+starts (`Src\Support\Schema::ensureTables()`),
+so no manual migration is required.
+Every statement uses `CREATE TABLE IF NOT EXISTS`,
 therefore the file can also be applied by hand as often as you like:
 
 ```
 mysql -u root -p search_place < database/schema.sql
 ```
 
-There are exactly two tables:
+There are three application tables (the Divar collector itself still writes only to
+`contacts` and `accommodations`):
 
-- `contacts`: phone numbers, unique per phone (`uq_contacts_phone`). Filled by a
-  later step, not by the collector.
-- `accommodations`: the collected listings.
+- `contacts`: phone numbers, unique per phone (`uq_contacts_phone`). When a user
+  explicitly saves a Balad result, its first valid phone is saved here and linked
+  through `accommodations.contact_id`; Divar phone collection remains a later step.
+- `accommodations`: stored provider places/listings. Balad places are saved only
+  when the user clicks that result's save button; searching and paging do not
+  persist every result. Divar collection continues to harvest its full result set
+  in batches.
   - `contact_id`: nullable FK to `contacts` (`ON DELETE SET NULL`)
-  - `(provider, external_id)`: unique; for Divar `external_id` is the ad token
-  - `provider_data` (JSON): Divar specific fields (price text, descriptions,
-    image, `web_info`) plus harvest metadata (job id, page, query, city id,
-    timestamp)
-  - `raw_data` (JSON): the complete raw payload of the ad
+  - `(provider, external_id)`: unique; the value is the provider's place/ad ID
+  - `provider_data` (JSON): provider-specific fields and search/harvest context
+    that do not have dedicated columns
+  - `raw_data` (JSON): the complete raw provider payload for the stored place/ad
   - `latitude` / `longitude` / `price` are nullable and are **never overwritten
     with NULL** by a re-run of the collector
+- `call_logs`: click-to-call records and their `pending` / `completed` /
+  `cancelled` status for providers that enable call tracking. Balad uses the
+  save action only and does not create call-log records.
 
 Requires MySQL 5.7+ / MariaDB 10.2+ (JSON column type). On very old InnoDB
 setups that reject a full length index on `title` (error 1071), `Schema`
@@ -211,12 +228,12 @@ Configuration files include:
 - `config/provinces.php`: Province and city mappings
 - `config/cities.json`: City list with Divar slugs and Divar city ids
 - `config/divar.php`: Divar settings, including the `collect` block
-- `database/schema.sql`: Database schema (`contacts`, `accommodations`)
+- `database/schema.sql`: Database schema (`contacts`, `accommodations`, `call_logs`)
 - `.env`: Environment variables for database and application settings
 
 ## Call Tracking
-When a user clicks the "call" button on a place result, the action is logged to the database:
-- Call data is stored in the `call_logs` table
+Call tracking remains available for non-Balad providers that show a call button. Balad results use the save action and do not create `call_logs` records.
+- Call data for supported providers is stored in the `call_logs` table
 - Information stored includes: place ID, phone number, city, category, timestamp, IP address, and user agent
 - Database connection is configured via the `.env` file
 - All call data is sanitized before database insertion for security
