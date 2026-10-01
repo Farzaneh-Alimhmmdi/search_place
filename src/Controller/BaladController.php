@@ -7,6 +7,7 @@ use Src\Support\Db;
 use Src\Support\Logger;
 use Src\Http\CurlHttpClient;
 use Src\Balad\BaladClient;
+use Src\Balad\BaladContactRepository;
 use Src\Balad\BaladPlaceMapper;
 use Src\Balad\BaladSearchService;
 use Src\Divar\AccommodationRepository;
@@ -194,10 +195,54 @@ final class BaladController
                 return;
             }
 
+            $contactRepository = new BaladContactRepository();
+            $contactIdsByPlace = [];
+            $contactFailures = 0;
+
+            foreach ($places as $place) {
+                if (!is_array($place)) {
+                    continue;
+                }
+
+                $externalId = BaladPlaceMapper::externalId($place);
+                $phone = BaladPlaceMapper::contactPhone($place);
+
+                if ($externalId === null || $phone === null) {
+                    continue;
+                }
+
+                try {
+                    $contactIdsByPlace[$externalId] = $contactRepository->findOrCreate($phone);
+                } catch (\Throwable $e) {
+                    $contactFailures++;
+                    Logger::warning('Could not save Balad contact phone', [
+                        'external_id' => $externalId,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+
+            $linkedContacts = 0;
+
+            foreach ($rows as &$row) {
+                $contactId = $contactIdsByPlace[$row['external_id']] ?? null;
+
+                if ($contactId !== null) {
+                    $row['contact_id'] = $contactId;
+                    $linkedContacts++;
+                }
+            }
+            unset($row);
+
             $saveResult = (new AccommodationRepository())->upsertMany($rows);
             $skipped = max(0, count($places) - count($rows));
 
-            if (!$saveResult['ok'] || $saveResult['failed'] > 0 || $skipped > 0) {
+            if (
+                !$saveResult['ok'] ||
+                $saveResult['failed'] > 0 ||
+                $skipped > 0 ||
+                $contactFailures > 0
+            ) {
                 Logger::warning('Balad results were only partially stored', [
                     'city' => $this->selectedCity,
                     'category' => $this->selectedCategory,
@@ -208,10 +253,12 @@ final class BaladController
                         : 0,
                     'failed_rows' => $saveResult['failed'],
                     'skipped_rows' => $skipped,
+                    'contact_failures' => $contactFailures,
+                    'linked_contacts' => $linkedContacts,
                     'error' => $saveResult['error'],
                 ]);
-                $this->error = 'نتایج بلد نمایش داده شد، اما ذخیره‌سازی همه مکان‌ها ' .
-                    'در پایگاه داده کامل نشد.';
+                $this->error = 'نتایج بلد نمایش داده شد، اما ذخیره برخی مکان‌ها یا ' .
+                    'شماره‌های تماس در پایگاه داده کامل نشد.';
 
                 return;
             }
@@ -221,6 +268,7 @@ final class BaladController
                 'category' => $this->selectedCategory,
                 'page' => $this->currentPage,
                 'count' => count($rows),
+                'linked_contacts' => $linkedContacts,
                 'inserted' => $saveResult['inserted'],
                 'updated' => $saveResult['updated'],
                 'unchanged' => $saveResult['unchanged'],

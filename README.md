@@ -54,9 +54,11 @@ The project follows a clean architecture pattern with separate components for:
 3. Service uses client to make API calls
 4. After a successful Balad search, the current results page is upserted into
    `accommodations` (`provider = 'balad'`, `external_id =` the Balad place token).
-   Repeated searches update the same place instead of creating duplicates; the
-   existing search and pagination flow is unchanged. Other providers keep their
-   existing behavior.
+   Available phone numbers are normalized and upserted into `contacts`; the
+   place's single `contact_id` links to the first valid number. The full source
+   telephone value remains in provider JSON. Repeated searches reuse contacts and
+   update the place instead of creating duplicates; pagination is unchanged.
+   Other providers keep their existing behavior.
 5. Results are passed back to controller and rendered by view
 
 ## Divar Collection Page (`/divar_collect`)
@@ -149,8 +151,9 @@ mysql -u root -p search_place < database/schema.sql
 There are three application tables (the Divar collector itself still writes only to
 `contacts` and `accommodations`):
 
-- `contacts`: phone numbers, unique per phone (`uq_contacts_phone`). Filled by a
-  later step, not by the collector.
+- `contacts`: phone numbers, unique per phone (`uq_contacts_phone`). Balad search
+  saves available phone numbers here and links the primary one through
+  `accommodations.contact_id`; Divar phone collection remains a later step.
 - `accommodations`: stored provider places/listings. Balad search results are
   upserted page-by-page; Divar collection continues to harvest its full result
   set in batches.

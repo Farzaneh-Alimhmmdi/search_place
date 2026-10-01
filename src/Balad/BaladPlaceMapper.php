@@ -24,19 +24,9 @@ final class BaladPlaceMapper
      */
     public static function toRow(array $place, array $context): ?array
     {
-        $externalId = self::firstString([
-            $place['token'] ?? null,
-            $place['id'] ?? null,
-            $place['place_id'] ?? null,
-        ]);
+        $externalId = self::externalId($place);
 
-        if ($externalId === null || $externalId === '') {
-            return null;
-        }
-
-        $externalId = Str::limit($externalId, 255) ?? '';
-
-        if ($externalId === '') {
+        if ($externalId === null) {
             return null;
         }
 
@@ -49,12 +39,7 @@ final class BaladPlaceMapper
             $raw['name'] ?? null,
         ]) ?? ('مکان بلد ' . $externalId);
 
-        $telephone = self::firstString([
-            $place['telephone'] ?? null,
-            $place['phone'] ?? null,
-            $raw['telephone'] ?? null,
-            $raw['phone'] ?? null,
-        ]);
+        $telephone = self::telephone($place);
         $website = self::firstString([
             $place['website'] ?? null,
             $raw['website'] ?? null,
@@ -143,6 +128,78 @@ final class BaladPlaceMapper
         }
 
         return $rows;
+    }
+
+    /**
+     * Return the stable ID used as the accommodations external_id.
+     */
+    public static function externalId(array $place): ?string
+    {
+        $externalId = self::firstString([
+            $place['token'] ?? null,
+            $place['id'] ?? null,
+            $place['place_id'] ?? null,
+        ]);
+
+        if ($externalId === null || $externalId === '') {
+            return null;
+        }
+
+        $externalId = Str::limit($externalId, 255) ?? '';
+
+        return $externalId === '' ? null : $externalId;
+    }
+
+    /**
+     * Return one valid normalized phone number to link through contact_id.
+     *
+     * accommodations has one contact_id per place. If Balad returns several
+     * numbers in one telephone string, the first valid number is the primary
+     * contact; the full source value remains in provider_data/raw_data.
+     */
+    public static function contactPhone(array $place): ?string
+    {
+        $telephone = self::telephone($place);
+
+        if ($telephone === null) {
+            return null;
+        }
+
+        $candidates = preg_split('/[,;،\\/|\\r\\n]+/u', $telephone, -1, PREG_SPLIT_NO_EMPTY);
+
+        foreach (is_array($candidates) ? $candidates : [$telephone] as $candidate) {
+            $candidate = trim(Str::normalizeNumbers(trim($candidate)));
+
+            if ($candidate === '' || preg_match('/^\\+?[0-9\\s().-]+$/', $candidate) !== 1) {
+                continue;
+            }
+
+            $digits = preg_replace('/[^0-9]/', '', $candidate);
+
+            if (!is_string($digits) || strlen($digits) < 7) {
+                continue;
+            }
+
+            $phone = str_starts_with($candidate, '+') ? '+' . $digits : $digits;
+
+            if (strlen($phone) <= 20) {
+                return $phone;
+            }
+        }
+
+        return null;
+    }
+
+    private static function telephone(array $place): ?string
+    {
+        $raw = isset($place['raw']) && is_array($place['raw']) ? $place['raw'] : [];
+
+        return self::firstString([
+            $place['telephone'] ?? null,
+            $place['phone'] ?? null,
+            $raw['telephone'] ?? null,
+            $raw['phone'] ?? null,
+        ]);
     }
 
     /**
