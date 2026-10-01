@@ -28,6 +28,7 @@ final class BaladController
     private string $selectedCategory = 'guest-house';
     private ?array $results = null;
     private ?string $error = null;
+    private ?string $baladResultSetKey = null;
 
     public function run(): void
     {
@@ -44,6 +45,11 @@ final class BaladController
         $this->initHttp();
         $this->loadData();
         $this->handleRequest();
+
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            session_write_close();
+        }
+
         $this->render();
     }
 
@@ -84,6 +90,11 @@ final class BaladController
         $this->error = null;
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            if (($_POST['action'] ?? '') === 'save_place') {
+                $this->saveSelectedPlace();
+                return;
+            }
+
             // Handle call logging (AJAX)
             if (isset($_POST['action']) && $_POST['action'] === 'call' && isset($_POST['place_id'])) {
                 try {
@@ -132,13 +143,22 @@ final class BaladController
                     $this->error = $result['success'] ? null : ($result['error'] ?? 'خطای ناشناخته');
 
                     if ($this->results) {
-                        // Store only the page already fetched for this search. The
-                        // normal Balad search and pagination flow stays unchanged.
-                        $this->storeSearchResults($citySlug);
+                        // Cache this page in the session so only an explicitly
+                        // selected result can be saved later.
+                        $this->cacheSearchResults($citySlug);
 
-                        // Call-log data is optional for rendering the places; a
-                        // missing call_logs table must not prevent their storage.
+                        // Schema preparation does not save places. Keep it
+                        // separate from call-status loading so one failure does
+                        // not prevent the existing status lookup from running.
                         if (!empty($this->results['places'])) {
+                            try {
+                                Schema::ensureTables();
+                            } catch (\Throwable $e) {
+                                Logger::warning('Could not prepare Balad result schema', [
+                                    'error' => $e->getMessage(),
+                                ]);
+                            }
+
                             try {
                                 $this->loadExistingCallLogs();
                             } catch (\Throwable $e) {
@@ -157,132 +177,206 @@ final class BaladController
     }
 
     /**
-     * Persist this successful Balad result page in the shared accommodations table.
-     * Repeated searches are safe because the repository upserts by provider and ID.
+     * Cache the current page server-side so a save action can only select a
+     * place that was actually returned to this user's Balad search.
      */
-    private function storeSearchResults(string $citySlug): void
+    private function cacheSearchResults(string $citySlug): void
     {
+        $this->baladResultSetKey = null;
+
+        if (session_status() === PHP_SESSION_NONE && !headers_sent()) {
+            session_start();
+        }
+
+        if (session_status() !== PHP_SESSION_ACTIVE) {
+            return;
+        }
+
         $places = $this->results['places'] ?? [];
 
         if (!is_array($places) || $places === []) {
             return;
         }
 
-        try {
-            $changes = Schema::ensureTables();
+        $placesById = [];
 
-            if ($changes !== []) {
-                Logger::info('Balad search: schema updated', ['changes' => $changes]);
+        foreach ($places as $place) {
+            if (!is_array($place)) {
+                continue;
             }
 
-            $rows = BaladPlaceMapper::toRows($places, [
+            $externalId = BaladPlaceMapper::externalId($place);
+
+            if ($externalId !== null) {
+                $placesById[$externalId] = $place;
+            }
+        }
+
+        if ($placesById === []) {
+            return;
+        }
+
+        try {
+            $key = bin2hex(random_bytes(16));
+        } catch (\Throwable $e) {
+            Logger::warning('Could not create Balad result selection key', [
+                'error' => $e->getMessage(),
+            ]);
+
+            return;
+        }
+
+        $now = time();
+        $sets = $_SESSION['balad_search_result_sets'] ?? [];
+        $sets = is_array($sets) ? $sets : [];
+
+        foreach ($sets as $existingKey => $set) {
+            if (!is_array($set) || (int) ($set['expires_at'] ?? 0) < $now) {
+                unset($sets[$existingKey]);
+            }
+        }
+
+        $sets[$key] = [
+            'expires_at' => $now + 1800,
+            'context' => [
                 'city' => $this->selectedCity,
                 'city_slug' => $citySlug,
                 'category' => $this->selectedCategory,
                 'page' => $this->currentPage,
-            ]);
+            ],
+            'places' => $placesById,
+        ];
 
-            if ($rows === []) {
-                Logger::warning('Balad results had no storable place IDs', [
-                    'city' => $this->selectedCity,
-                    'category' => $this->selectedCategory,
-                    'page' => $this->currentPage,
-                    'place_count' => count($places),
-                ]);
-                $this->error = 'نتایج بلد نمایش داده شد، اما شناسه‌ای برای ذخیره‌سازی ' .
-                    'در پایگاه داده پیدا نشد.';
+        while (count($sets) > 5) {
+            $oldestKey = array_key_first($sets);
 
-                return;
+            if ($oldestKey === null) {
+                break;
             }
 
-            $contactRepository = new BaladContactRepository();
-            $contactIdsByPlace = [];
-            $contactFailures = 0;
+            unset($sets[$oldestKey]);
+        }
 
-            foreach ($places as $place) {
-                if (!is_array($place)) {
-                    continue;
-                }
+        $_SESSION['balad_search_result_sets'] = $sets;
+        $this->baladResultSetKey = $key;
+    }
 
-                $externalId = BaladPlaceMapper::externalId($place);
-                $phone = BaladPlaceMapper::contactPhone($place);
+    /**
+     * Save only the place explicitly selected from the current Balad results.
+     */
+    private function saveSelectedPlace(): void
+    {
+        if (session_status() === PHP_SESSION_NONE && !headers_sent()) {
+            session_start();
+        }
 
-                if ($externalId === null || $phone === null) {
-                    continue;
-                }
+        $key = $_POST['result_set_key'] ?? null;
+        $placeId = $_POST['place_id'] ?? null;
 
-                try {
-                    $contactIdsByPlace[$externalId] = $contactRepository->findOrCreate($phone);
-                } catch (\Throwable $e) {
-                    $contactFailures++;
-                    Logger::warning('Could not save Balad contact phone', [
-                        'external_id' => $externalId,
-                        'error' => $e->getMessage(),
-                    ]);
-                }
+        if (
+            session_status() !== PHP_SESSION_ACTIVE ||
+            !is_string($key) || preg_match('/^[a-f0-9]{32}$/i', $key) !== 1 ||
+            !is_string($placeId) || $placeId === '' || strlen($placeId) > 1024
+        ) {
+            $this->sendJsonResponse([
+                'success' => false,
+                'message' => 'درخواست ذخیره‌سازی مکان نامعتبر است.',
+            ], 400);
+        }
+
+        $set = $_SESSION['balad_search_result_sets'][$key] ?? null;
+
+        if (
+            !is_array($set) ||
+            (int) ($set['expires_at'] ?? 0) < time() ||
+            !is_array($set['places'] ?? null)
+        ) {
+            $this->sendJsonResponse([
+                'success' => false,
+                'message' => 'نتیجه جستجو منقضی شده است؛ دوباره جستجو کنید.',
+            ], 410);
+        }
+
+        $place = $set['places'][$placeId] ?? null;
+        $context = is_array($set['context'] ?? null) ? $set['context'] : [];
+
+        if (!is_array($place)) {
+            $this->sendJsonResponse([
+                'success' => false,
+                'message' => 'مکان انتخاب‌شده در نتایج این جستجو نیست.',
+            ], 404);
+        }
+
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            session_write_close();
+        }
+
+        try {
+            Schema::ensureTables();
+
+            $row = BaladPlaceMapper::toRow($place, $context);
+
+            if ($row === null) {
+                $this->sendJsonResponse([
+                    'success' => false,
+                    'message' => 'شناسه مکان برای ذخیره‌سازی معتبر نیست.',
+                ], 422);
             }
 
-            $linkedContacts = 0;
+            $phone = BaladPlaceMapper::contactPhone($place);
 
-            foreach ($rows as &$row) {
-                $contactId = $contactIdsByPlace[$row['external_id']] ?? null;
-
-                if ($contactId !== null) {
-                    $row['contact_id'] = $contactId;
-                    $linkedContacts++;
-                }
+            if ($phone !== null) {
+                $row['contact_id'] = (new BaladContactRepository())->findOrCreate($phone);
             }
-            unset($row);
 
-            $saveResult = (new AccommodationRepository())->upsertMany($rows);
-            $skipped = max(0, count($places) - count($rows));
+            $saveResult = (new AccommodationRepository())->upsertMany([$row]);
 
-            if (
-                !$saveResult['ok'] ||
-                $saveResult['failed'] > 0 ||
-                $skipped > 0 ||
-                $contactFailures > 0
-            ) {
-                Logger::warning('Balad results were only partially stored', [
-                    'city' => $this->selectedCity,
-                    'category' => $this->selectedCategory,
-                    'page' => $this->currentPage,
-                    'places' => count($places),
-                    'saved_rows' => $saveResult['ok']
-                        ? max(0, count($rows) - $saveResult['failed'])
-                        : 0,
-                    'failed_rows' => $saveResult['failed'],
-                    'skipped_rows' => $skipped,
-                    'contact_failures' => $contactFailures,
-                    'linked_contacts' => $linkedContacts,
+            if (!$saveResult['ok'] || $saveResult['failed'] > 0) {
+                Logger::error('Could not save selected Balad place', [
+                    'external_id' => $row['external_id'],
                     'error' => $saveResult['error'],
                 ]);
-                $this->error = 'نتایج بلد نمایش داده شد، اما ذخیره برخی مکان‌ها یا ' .
-                    'شماره‌های تماس در پایگاه داده کامل نشد.';
-
-                return;
+                $this->sendJsonResponse([
+                    'success' => false,
+                    'message' => 'ذخیره مکان انتخاب‌شده در پایگاه داده ناموفق بود.',
+                ], 500);
             }
 
-            Logger::info('Balad search results stored', [
-                'city' => $this->selectedCity,
-                'category' => $this->selectedCategory,
-                'page' => $this->currentPage,
-                'count' => count($rows),
-                'linked_contacts' => $linkedContacts,
+            Logger::info('Selected Balad place stored', [
+                'external_id' => $row['external_id'],
+                'contact_saved' => $phone !== null,
                 'inserted' => $saveResult['inserted'],
                 'updated' => $saveResult['updated'],
                 'unchanged' => $saveResult['unchanged'],
             ]);
+
+            $this->sendJsonResponse([
+                'success' => true,
+                'message' => 'مکان انتخاب‌شده با موفقیت ذخیره شد.',
+                'contact_saved' => $phone !== null,
+            ]);
         } catch (\Throwable $e) {
-            Logger::error('Could not store Balad search results', [
-                'city' => $this->selectedCity,
-                'category' => $this->selectedCategory,
-                'page' => $this->currentPage,
+            Logger::error('Could not save selected Balad place', [
+                'place_id' => $placeId,
                 'error' => $e->getMessage(),
             ]);
-            $this->error = 'نتایج بلد نمایش داده شد، اما ذخیره اطلاعات ' .
-                'در پایگاه داده ناموفق بود.';
+            $this->sendJsonResponse([
+                'success' => false,
+                'message' => 'ذخیره مکان انتخاب‌شده در پایگاه داده ناموفق بود.',
+            ], 500);
         }
+    }
+
+    /** @param array<string,mixed> $payload */
+    private function sendJsonResponse(array $payload, int $statusCode = 200): void
+    {
+        http_response_code($statusCode);
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(
+            $payload,
+            JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE
+        );
+        exit;
     }
 
     private function loadExistingCallLogs(): void
@@ -359,7 +453,9 @@ final class BaladController
             [],  // allProvinceCities
             '', // selectedQuery
             $this->currentPage,
-            $this->results['page_count'] ?? 1
+            $this->results['page_count'] ?? 1,
+            0, // totalResults is used by Divar pagination only
+            $this->baladResultSetKey
         );
         // Pass existing call logs to view
         $view->setExistingCallLogs($this->existingCallLogs ?? []);

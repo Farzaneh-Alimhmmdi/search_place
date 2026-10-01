@@ -52,14 +52,15 @@ The project follows a clean architecture pattern with separate components for:
 1. User selects city and category via form submission
 2. Controller processes the request and calls the service
 3. Service uses client to make API calls
-4. After a successful Balad search, the current results page is upserted into
-   `accommodations` (`provider = 'balad'`, `external_id =` the Balad place token).
-   Available phone numbers are normalized and upserted into `contacts`; the
-   place's single `contact_id` links to the first valid number. The full source
-   telephone value remains in provider JSON. Repeated searches reuse contacts and
-   update the place instead of creating duplicates; pagination is unchanged.
-   Other providers keep their existing behavior.
-5. Results are passed back to controller and rendered by view
+4. Search results are rendered and paginated without automatically saving all
+   returned places.
+5. When the user clicks **Save this place** on a Balad result, only that place is
+   upserted into `accommodations` (`provider = 'balad'`, `external_id` is the
+   Balad place token). Its first valid phone is normalized and upserted into
+   `contacts`, and `accommodations.contact_id` links to that contact. The full
+   source telephone value remains in provider JSON. Repeated saves reuse contacts
+   and update the selected place instead of creating duplicates. Other providers
+   keep their existing behavior.
 
 ## Divar Collection Page (`/divar_collect`)
 A second Divar page whose only job is to **fetch everything and store it in the
@@ -139,8 +140,9 @@ explicitly instead of silently falling back to Tehran.
 
 ## Database Schema
 `database/schema.sql` is the single source of truth and is applied
-automatically before Balad results/call logs are stored or a Divar collection
-starts (`Src\Support\Schema::ensureTables()`), so no manual migration is required.
+automatically before Balad call logs are read/saved, a selected Balad place is
+saved, or a Divar collection starts (`Src\Support\Schema::ensureTables()`),
+so no manual migration is required.
 Every statement uses `CREATE TABLE IF NOT EXISTS`,
 therefore the file can also be applied by hand as often as you like:
 
@@ -151,12 +153,13 @@ mysql -u root -p search_place < database/schema.sql
 There are three application tables (the Divar collector itself still writes only to
 `contacts` and `accommodations`):
 
-- `contacts`: phone numbers, unique per phone (`uq_contacts_phone`). Balad search
-  saves available phone numbers here and links the primary one through
-  `accommodations.contact_id`; Divar phone collection remains a later step.
-- `accommodations`: stored provider places/listings. Balad search results are
-  upserted page-by-page; Divar collection continues to harvest its full result
-  set in batches.
+- `contacts`: phone numbers, unique per phone (`uq_contacts_phone`). When a user
+  explicitly saves a Balad result, its first valid phone is saved here and linked
+  through `accommodations.contact_id`; Divar phone collection remains a later step.
+- `accommodations`: stored provider places/listings. Balad places are saved only
+  when the user clicks that result's save button; searching and paging do not
+  persist every result. Divar collection continues to harvest its full result set
+  in batches.
   - `contact_id`: nullable FK to `contacts` (`ON DELETE SET NULL`)
   - `(provider, external_id)`: unique; the value is the provider's place/ad ID
   - `provider_data` (JSON): provider-specific fields and search/harvest context

@@ -5,8 +5,9 @@
 --
 -- Three application tables:
 --
---   contacts        -> normalized phone numbers; Balad stores available numbers
---                      while Divar phone collection remains a later step
+--   contacts        -> normalized phone numbers; saved Balad places link a
+--                      valid available number while Divar phone collection remains
+--                      a later step
 --   accommodations  -> collected provider places/listings
 --   call_logs       -> call-button actions and their status (not used by the
 --                      Divar collector; collection state remains in session)
