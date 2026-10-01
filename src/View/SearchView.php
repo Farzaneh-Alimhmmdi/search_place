@@ -1515,6 +1515,8 @@ final class SearchView
                         });
                 });
 
+                const divarPhoneFailureMessage = 'وارد سایت دیوار شوید و کپجا را حل کنیدتا دسترسی شما باز شود';
+
                 function fetchDivarPhone(btn) {
                     const placeId = btn.dataset.placeId;
                     btn.classList.add('loading');
@@ -1534,19 +1536,19 @@ final class SearchView
                                 wrapper.className = 'divar-phone-result';
                                 wrapper.innerHTML = '📞 ' + data.phone_number;
                                 btn.parentNode.replaceChild(wrapper, btn);
-                            } else if (data.authentication_required) {
+                            } else if (data.authentication_required && !data.phone_fetch_failed) {
                                 pendingPlaceButton = btn;
                                 btn.disabled = false;
                                 openDivarModal();
                             } else {
                                 btn.disabled = false;
-                                alert(data.message || 'دریافت شماره ناموفق بود');
+                                alert(data.message || divarPhoneFailureMessage);
                             }
                         })
                         .catch(() => {
                             btn.classList.remove('loading');
                             btn.disabled = false;
-                            alert('خطا در ارتباط با سرور');
+                            alert(divarPhoneFailureMessage);
                         });
                 }
 

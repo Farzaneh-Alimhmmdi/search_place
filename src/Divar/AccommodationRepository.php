@@ -2,11 +2,13 @@
 
 namespace Src\Divar;
 
+use InvalidArgumentException;
 use PDO;
 use PDOException;
 use PDOStatement;
 use Src\Support\Db;
 use Src\Support\Logger;
+use Src\Support\Str;
 use Throwable;
 
 /**
@@ -181,6 +183,71 @@ final class AccommodationRepository
         }
 
         return $result;
+    }
+
+    /**
+     * Save an ad after fetching its phone, or update only its contact link.
+     *
+     * Contacts are unique by phone and may be shared by multiple listings. A
+     * changed phone therefore links the ad to the matching/new contact instead
+     * of changing the old contact's phone (and affecting other ads).
+     *
+     * Both writes are atomic: a failed ad insert must not leave an orphaned
+     * contact behind. Existing listing details and contact names/notes stay
+     * untouched.
+     *
+     * @param array<string,mixed> $row output of DivarAdMapper::toRow()
+     * @return int the linked contact ID
+     * @throws Throwable when either write fails
+     */
+    public function upsertWithContact(array $row, string $phone): int
+    {
+        $phone = Str::normalizeNumbers(trim($phone));
+        $phone = (string) preg_replace('/[\s()\-]+/u', '', $phone);
+
+        // Use the same local form for Iranian numbers returned with +98/0098.
+        $phone = (string) preg_replace('/^(?:\+98|0098|98)([1-9][0-9]{9})$/D', '0$1', $phone);
+
+        if (preg_match('/^\+?[0-9]{7,15}$/D', $phone) !== 1) {
+            throw new InvalidArgumentException('Invalid phone number.');
+        }
+
+        if (empty($row['provider']) || empty($row['external_id'])) {
+            throw new InvalidArgumentException('Provider and external ID are required.');
+        }
+
+        $this->pdo->beginTransaction();
+
+        try {
+            $contact = $this->pdo->prepare(
+                'INSERT INTO contacts (phone) VALUES (?) ' .
+                'ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)'
+            );
+            $contact->execute([$phone]);
+
+            // LAST_INSERT_ID(id) also returns the existing ID on a duplicate.
+            $contactId = (int) $this->pdo->lastInsertId();
+            $row['contact_id'] = $contactId;
+
+            $columns = implode(', ', self::COLUMNS);
+            $placeholders = implode(', ', array_fill(0, count(self::COLUMNS), '?'));
+            $ad = $this->pdo->prepare(
+                'INSERT INTO accommodations (' . $columns . ') ' .
+                'VALUES (' . $placeholders . ') ' .
+                'ON DUPLICATE KEY UPDATE contact_id = VALUES(contact_id)'
+            );
+            $ad->execute($this->bindValues($row));
+
+            $this->pdo->commit();
+
+            return $contactId;
+        } catch (Throwable $e) {
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
+
+            throw $e;
+        }
     }
 
     /**

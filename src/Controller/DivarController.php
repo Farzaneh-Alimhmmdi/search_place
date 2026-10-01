@@ -5,7 +5,10 @@ namespace Src\Controller;
 use Src\Support\Config;
 use Src\Support\Db;
 use Src\Support\Logger;
+use Src\Support\Schema;
 use Src\Http\CurlHttpClient;
+use Src\Divar\AccommodationRepository;
+use Src\Divar\DivarSearchAdStore;
 use Src\Divar\DivarClient;
 use Src\Divar\DivarSearchService;
 use Src\Divar\DivarCookieManager;
@@ -13,6 +16,9 @@ use Src\View\SearchView;
 
 final class DivarController
 {
+    private const PHONE_FETCH_FAILURE_MESSAGE =
+        'وارد سایت دیوار شوید و کپجا را حل کنیدتا دسترسی شما باز شود';
+
     private CurlHttpClient $http;
     private DivarClient $client;
     private ?DivarSearchService $service = null;
@@ -640,7 +646,7 @@ final class DivarController
                 $this->setDivarCookiesAction();
                 exit; // MUST exit: run() would otherwise call render() right after this
             }
-            if (isset($_POST['action']) && $_POST['action'] === 'get_phone' && isset($_POST['place_id'])) {
+            if (isset($_POST['action']) && $_POST['action'] === 'get_phone') {
                 $this->getPhoneNumberAction();
                 exit; // MUST exit: run() would otherwise call render() right after this
             }
@@ -841,6 +847,17 @@ final class DivarController
                             }
 
                             $ads = $pageResult['ads'] ?? [];
+
+                            // Keep the listing server-side for the later get_phone request.
+                            DivarSearchAdStore::remember($ads, [
+                                'province' => $this->selectedProvince,
+                                'city' => $this->selectedCity,
+                                'city_slug' => $citySlug,
+                                'divar_city_id' => $divarCityId,
+                                'category' => $this->selectedCategory,
+                                'query' => $this->selectedQuery,
+                                'page' => $requestedPage,
+                            ]);
 
                             $pagination =
                                 $pageResult['pagination'] ?? [];
@@ -1261,7 +1278,9 @@ final class DivarController
     {
         header('Content-Type: application/json; charset=utf-8');
 
-        $placeId = trim($_POST['place_id'] ?? '');
+        $placeId = is_string($_POST['place_id'] ?? null)
+            ? trim($_POST['place_id'])
+            : '';
 
         if ($placeId === '') {
             http_response_code(400);
@@ -1289,6 +1308,19 @@ final class DivarController
                 'success' => false,
                 'authentication_required' => true,
                 'message' => 'Not authenticated with Divar. Please login first.'
+            ], JSON_UNESCAPED_UNICODE);
+
+            return;
+        }
+
+        $ad = DivarSearchAdStore::find($placeId);
+
+        if ($ad === null) {
+            http_response_code(409);
+
+            echo json_encode([
+                'success' => false,
+                'message' => 'اطلاعات آگهی در دسترس نیست. لطفاً جستجو را دوباره انجام دهید.'
             ], JSON_UNESCAPED_UNICODE);
 
             return;
@@ -1427,7 +1459,8 @@ final class DivarController
 
             echo json_encode([
                 'success' => false,
-                'message' => 'cURL error: ' . $curlError
+                'phone_fetch_failed' => true,
+                'message' => self::PHONE_FETCH_FAILURE_MESSAGE
             ], JSON_UNESCAPED_UNICODE);
 
             return;
@@ -1452,7 +1485,8 @@ final class DivarController
             echo json_encode([
                 'success' => false,
                 'authentication_required' => true,
-                'message' => 'Divar authentication has expired. Please login again.'
+                'phone_fetch_failed' => true,
+                'message' => self::PHONE_FETCH_FAILURE_MESSAGE
             ], JSON_UNESCAPED_UNICODE);
 
             return;
@@ -1478,8 +1512,8 @@ final class DivarController
 
             echo json_encode([
                 'success' => false,
-                'message' => 'Divar returned HTTP ' . $httpCode,
-                'response' => $response
+                'phone_fetch_failed' => true,
+                'message' => self::PHONE_FETCH_FAILURE_MESSAGE
             ], JSON_UNESCAPED_UNICODE);
 
             return;
@@ -1510,7 +1544,8 @@ final class DivarController
 
             echo json_encode([
                 'success' => false,
-                'message' => 'Invalid JSON response from Divar'
+                'phone_fetch_failed' => true,
+                'message' => self::PHONE_FETCH_FAILURE_MESSAGE
             ], JSON_UNESCAPED_UNICODE);
 
             return;
@@ -1554,6 +1589,29 @@ final class DivarController
             $phoneNumber !== null &&
             $phoneNumber !== ''
         ) {
+            try {
+                if (($_SESSION['divar_schema_ready'] ?? null) !== Schema::VERSION) {
+                    Schema::ensureTables();
+                    $_SESSION['divar_schema_ready'] = Schema::VERSION;
+                }
+
+                (new AccommodationRepository())->upsertWithContact($ad, $phoneNumber);
+            } catch (\Throwable $e) {
+                Logger::error('Divar ad/contact could not be saved', [
+                    'place_id' => $placeId,
+                    'exception' => get_class($e),
+                    'code' => $e->getCode(),
+                ]);
+
+                http_response_code(500);
+
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'شماره تماس دریافت شد، اما ذخیره آگهی و مخاطب ناموفق بود. لطفاً دوباره تلاش کنید.'
+                ], JSON_UNESCAPED_UNICODE);
+
+                return;
+            }
 
             echo json_encode([
                 'success' => true,
@@ -1578,7 +1636,8 @@ final class DivarController
 
         echo json_encode([
             'success' => false,
-            'message' => 'Phone number not found in Divar response'
+            'phone_fetch_failed' => true,
+            'message' => self::PHONE_FETCH_FAILURE_MESSAGE
         ], JSON_UNESCAPED_UNICODE);
     }
 

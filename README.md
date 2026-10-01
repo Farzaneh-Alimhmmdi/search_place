@@ -54,6 +54,46 @@ The project follows a clean architecture pattern with separate components for:
 3. Service uses client to make API calls
 4. Results are passed back to controller and rendered by view
 
+## Divar Phone Persistence (`/search_place`)
+When **Divar** is selected, clicking **دریافت شماره تماس** now saves the ad and
+its contact after Divar successfully returns a phone number:
+
+- The server remembers a bounded snapshot of the searched ads in the PHP
+  session (`DivarSearchAdStore`); the browser only sends the ad token. Searching
+  alone does not insert listings or contacts.
+- The phone is normalized (Persian/Arabic digits and Iranian international
+  prefixes) and inserted into `contacts`, or the existing contact with that
+  phone is reused. Contact names and notes are not overwritten.
+- A new ad is inserted into `accommodations` with its full search data and
+  `contact_id`. If `(provider, external_id)` already exists, **only its
+  `contact_id` is updated**; its other data stays unchanged. Changing an ad's
+  phone does not change a shared contact's phone or other ads' contact links.
+- Both writes run in one transaction. A failed save rolls back and returns a
+  Persian error instead of reporting success. The tables are prepared using
+  the existing `Schema::ensureTables()` mechanism.
+- Unknown/expired ad snapshots ask the user to repeat the search. The session
+  retains up to 240 recently viewed ads, rather than an entire result set.
+- Failed Divar phone requests (including authentication/access failures,
+  network errors, invalid responses, or no phone in the response) display:
+  «وارد سایت دیوار شوید و کپجا را حل کنیدتا دسترسی شما باز شود».
+  These provider failures show the message instead of reopening the OTP modal;
+  the initial login flow and database-save error messages remain unchanged.
+
+This does not change `/divar_collect`: that page still collects ads without
+fetching phone numbers, and later collector reruns preserve `contact_id`.
+
+### Regression tests
+Run with PHP 8.2+ and the project's PHP extensions:
+
+```sh
+sh tests/run.sh
+```
+
+The tests cover snapshot mapping/limits, contact reuse, phone normalization,
+contact-only listing updates, transaction rollback, schema initialization, and
+search/phone controller responses. Database and Divar I/O are mocked, so the
+suite needs no credentials and never contacts Divar or a production database.
+
 ## Divar Collection Page (`/divar_collect`)
 A second Divar page whose only job is to **fetch everything and store it in the
 database**.
