@@ -573,6 +573,69 @@ final class SearchView
                     color: #888;
                 }
 
+                /* Disabled provider hero panel */
+                .provider-disabled {
+                    background: linear-gradient(135deg, #ffffff 0%, #f2f7ff 100%);
+                    border: 2px dashed #b9d0f0;
+                    border-radius: 16px;
+                    padding: 44px 28px;
+                    text-align: center;
+                    margin-bottom: 20px;
+                }
+                .provider-disabled-icon {
+                    font-size: 54px;
+                    margin-bottom: 12px;
+                    filter: grayscale(0.4);
+                    opacity: 0.9;
+                }
+                .provider-disabled-pill {
+                    display: inline-block;
+                    font-size: 12px;
+                    font-weight: 700;
+                    padding: 4px 14px;
+                    border-radius: 999px;
+                    background: #fff4e0;
+                    color: #96650a;
+                    margin-bottom: 12px;
+                }
+                .provider-disabled-title {
+                    font-size: 19px;
+                    font-weight: 700;
+                    color: #1a1a2e;
+                    margin-bottom: 8px;
+                }
+                .provider-disabled-desc {
+                    font-size: 14px;
+                    color: #666;
+                    margin-bottom: 4px;
+                }
+                .provider-switch-row {
+                    display: flex;
+                    gap: 10px;
+                    justify-content: center;
+                    flex-wrap: wrap;
+                    margin-top: 20px;
+                }
+                .switch-provider-btn {
+                    padding: 11px 26px;
+                    border-radius: 10px;
+                    border: 2px solid #d2e3fc;
+                    background: #e8f0fe;
+                    color: #1a73e8;
+                    font-weight: 700;
+                    font-size: 14px;
+                    font-family: inherit;
+                    cursor: pointer;
+                    transition: all 0.2s ease;
+                }
+                .switch-provider-btn:hover {
+                    background: #1a73e8;
+                    border-color: #1a73e8;
+                    color: #fff;
+                    transform: translateY(-1px);
+                    box-shadow: 0 4px 12px rgba(26, 115, 232, 0.35);
+                }
+
                 /* Responsive */
                 @media (max-width: 600px) {
                     .container { padding: 16px 12px; }
@@ -697,7 +760,19 @@ final class SearchView
                 </form>
             </div>
 
-            <?php if ($this->error): ?>
+            <?php if ($this->provider === 'google_map'): ?>
+                <div class="provider-disabled">
+                    <div class="provider-disabled-icon">🗺️</div>
+                    <div class="provider-disabled-pill">موقتاً غیرفعال</div>
+                    <div class="provider-disabled-title">جستجو با گوگل‌مپ در حال حاضر امکان‌پذیر نیست</div>
+                    <div class="provider-disabled-desc">برای ادامه‌ی جستجو، یکی از منابع فعال را انتخاب کنید:</div>
+                    <div class="provider-switch-row">
+                        <button type="button" class="switch-provider-btn" data-provider="balad">بلد</button>
+                        <button type="button" class="switch-provider-btn" data-provider="neshan">نشان</button>
+                        <button type="button" class="switch-provider-btn" data-provider="divar">دیوار</button>
+                    </div>
+                </div>
+            <?php elseif ($this->error): ?>
                 <div class="error">خطا: <?= htmlspecialchars($this->error) ?></div>
             <?php endif; ?>
 
@@ -1389,6 +1464,22 @@ final class SearchView
                         updateCities(this.value);
                     });
                 }
+
+                // One-click switch from a disabled provider to a working one
+                document.querySelectorAll('.switch-provider-btn').forEach(function(btn) {
+                    btn.addEventListener('click', function() {
+                        var target = this.getAttribute('data-provider');
+                        if (providerSelect) {
+                            providerSelect.value = target;
+                        }
+                        var hiddenProvider = form ? form.querySelector('input[name="provider"]') : null;
+                        if (hiddenProvider) {
+                            hiddenProvider.value = target;
+                        }
+                        document.getElementById('pageInput').value = '1';
+                        form.submit();
+                    });
+                });
 
                 // Handle provider change - reload page with new provider
                 if (providerSelect) {

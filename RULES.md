@@ -9,7 +9,7 @@
 
 ### 2. Data Handling
 - All user inputs must be validated before processing
-- City names should match those in the provinces.json file or config/provinces.php
+- City names should match those in the config/provinces.json file or config/provinces.php
 - Category values must correspond to predefined options in categories.php
 - Error messages should be displayed in Persian (Farsi)
 

@@ -104,7 +104,7 @@ final class DivarController
     private function loadData(): void
     {
         $root = dirname(__DIR__, 2);
-        $this->provinces = json_decode(file_get_contents($root . '/provinces.json'), true) ?? [];
+        $this->provinces = json_decode(file_get_contents($root . '/config/provinces.json'), true) ?? [];
         $this->citySlugs = Config::get('city_slugs');
         $this->divarCategories = Config::get('categories');
         $this->cities = json_decode(file_get_contents(Config::get('cities_file')), true) ?? [];

@@ -249,6 +249,7 @@ final class NeshanClient
             'rasht' => 'رشت',
             'ardabil' => 'اردبیل',
             'bandar-abbas' => 'بندرعباس',
+            'kohgiluyeh-and-boyer-ahmad' => 'کهگیلویه و بویراحمد',
         ];
         
         return $slugMap[$citySlug] ?? $citySlug;

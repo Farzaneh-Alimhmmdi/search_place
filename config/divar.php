@@ -13,7 +13,7 @@ return [
         ['value' => 'temporary-rent', 'label' => 'اجاره روزانه/موقت'],
     ],
     'city_slugs' => require __DIR__ . '/provinces.php',
-    'cities_file' => __DIR__ . '/cities.json',
+    'cities_file' => __DIR__ . '/divar/cities.json',
     'log_path' => 'storage/logs',
 
     /*

@@ -86,13 +86,13 @@ undocumented endpoints can change without notice.
 - **Type:** Internal JSON API: `POST api.divar.ir/v8/postlist/w/search` with
   `{city_ids, category, query, pagination_data}`. Cursor pagination (base64url-encoded
   `PaginationData`, one page per PHP request, cursors kept in `$_SESSION`).
-- **Auth:** None for search (needs numeric `city_id` from `config/cities.json` — a city without
+- **Auth:** None for search (needs numeric `city_id` from `config/divar/cities.json` — a city without
   one cannot be searched, by design no Tehran fallback). Phone fetch needs login cookies
   obtained via the in-app OTP flow (`divar_send_otp` / `divar_verify_otp`).
 - **Phone:** `POST api.divar.ir/v8/postcontact/web/contact_info_v2/{token}` after login.
   Saved transactionally: `contacts` row reused by phone, `accommodations.contact_id` linked —
   search alone never writes listings (`DivarSearchAdStore` keeps a 240-ad session snapshot).
-- **Mapping:** `config/cities.json` (`city_id` + `divar_slug`); own category list in
+- **Mapping:** `config/divar/cities.json` (`city_id` + `divar_slug`); own category list in
   `config/divar.php` (`temporary-rent`); `DivarAdMapper` parses Persian prices
   (`۱٬۵۰۰٬۰۰۰ تومان` → `1500000`).
 - **Code:** `src/Divar/*` + `DivarController` (search+phone) + `DivarCollectController`

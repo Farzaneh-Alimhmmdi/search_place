@@ -187,7 +187,7 @@ Keep the tab open and active while collecting; the browser drives the loop.
 | `log_tail` | `8` | job log lines kept in the session |
 
 ### Divar city IDs
-Divar's search API needs the numeric city id (`city_ids`). `config/cities.json`
+Divar's search API needs the numeric city id (`city_ids`). `config/divar/cities.json`
 therefore carries a `city_id` for every listed city (Tehran = 1, Karaj = 2,
 Mashhad = 3, Isfahan = 4, Tabriz = 5, Shiraz = 6, Ahvaz = 7, Qom = 8, ...).
 A city without `city_id` cannot be collected: both Divar pages now say so
@@ -250,7 +250,7 @@ Configuration files include:
 - `config/balad.php`: Main configuration settings
 - `config/categories.php`: Available place categories
 - `config/provinces.php`: Province and city mappings
-- `config/cities.json`: City list with Divar slugs and Divar city ids
+- `config/divar/cities.json`: City list with Divar slugs and Divar city ids
 - `config/divar.php`: Divar settings, including the `collect` block
 - `database/schema.sql`: Database schema (`contacts`, `accommodations`, `call_logs`)
 - `.env`: Environment variables for database and application settings

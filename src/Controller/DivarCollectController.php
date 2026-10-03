@@ -120,7 +120,7 @@ final class DivarCollectController
     {
         $root = dirname(__DIR__, 2);
 
-        $provincesFile = $root . '/provinces.json';
+        $provincesFile = $root . '/config/provinces.json';
 
         if (is_file($provincesFile)) {
             $decoded = json_decode((string) file_get_contents($provincesFile), true);
@@ -134,7 +134,7 @@ final class DivarCollectController
         $categories = Config::get('categories', []);
         $this->divarCategories = is_array($categories) ? $categories : [];
 
-        $citiesFile = (string) Config::get('cities_file', $root . '/config/cities.json');
+        $citiesFile = (string) Config::get('cities_file', $root . '/config/divar/cities.json');
 
         if (is_file($citiesFile)) {
             $decoded = json_decode((string) file_get_contents($citiesFile), true);
@@ -1014,7 +1014,7 @@ final class DivarCollectController
         }
 
         /*
-         * 2) The value already is a slug of config/cities.json
+         * 2) The value already is a slug of config/divar/cities.json
          *    (this is what the form sends).
          */
         if ($info === null && isset($this->cities[$value])) {
@@ -1035,7 +1035,7 @@ final class DivarCollectController
         }
 
         if ($info === null || !is_array($info)) {
-            return $fail('شهر «' . Str::limit($value, 40) . '» در فهرست شهرها (config/cities.json) پیدا نشد.');
+            return $fail('شهر «' . Str::limit($value, 40) . '» در فهرست شهرها (config/divar/cities.json) پیدا نشد.');
         }
 
         $cityId = $info['city_id'] ?? null;
@@ -1052,7 +1052,7 @@ final class DivarCollectController
             return $fail(
                 'شناسه‌ی عددی شهر دیوار (city_id) برای «' .
                 Str::limit((string) ($info['name'] ?? $value), 40) .
-                '» در config/cities.json تعریف نشده است. بدون آن نمی‌توان از دیوار داده گرفت.'
+                '» در config/divar/cities.json تعریف نشده است. بدون آن نمی‌توان از دیوار داده گرفت.'
             );
         }
 

@@ -65,7 +65,7 @@ final class BaladController
     private function loadData(): void
     {
         $root = dirname(__DIR__, 2);
-        $this->provinces = json_decode(file_get_contents($root . '/provinces.json'), true) ?? [];
+        $this->provinces = json_decode(file_get_contents($root . '/config/provinces.json'), true) ?? [];
         $this->citySlugs = Config::get('city_slugs');
         $this->categories = require $root . '/config/categories.php';
     }

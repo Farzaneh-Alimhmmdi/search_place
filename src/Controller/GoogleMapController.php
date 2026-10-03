@@ -70,7 +70,7 @@ final class GoogleMapController
     private function loadData(): void
     {
         $root = dirname(__DIR__, 2);
-        $this->provinces = json_decode(file_get_contents($root . '/provinces.json'), true) ?? [];
+        $this->provinces = json_decode(file_get_contents($root . '/config/provinces.json'), true) ?? [];
         $this->citySlugs = Config::get('city_slugs');
         $this->categories = require $root . '/config/categories.php';
     }
@@ -97,35 +97,11 @@ final class GoogleMapController
                 exit;
             }
 
-            if ($this->selectedCity) {
-                $citySlug = $this->citySlugs[$this->selectedCity] ?? '';
-
-                if ($citySlug === '') {
-                    foreach ($this->provinces as $prov) {
-                        if (($prov['name'] ?? '') === $this->selectedCity && !empty($prov['slug'])) {
-                            $citySlug = $prov['slug'];
-                            break;
-                        }
-                    }
-                }
-
-                if ($citySlug === '') {
-                    $citySlug = rawurlencode($this->selectedCity);
-                }
-
-                try {
-                    $result = $this->service->search($citySlug, $this->selectedCategory, 1);
-                    $this->results = $result['success'] ? $result : null;
-                    $this->error = $result['success'] ? null : ($result['error'] ?? 'خطای ناشناخته');
-
-                    // Cache the displayed page for explicit selected saves and mark persisted rows.
-                    if ($this->results && !empty($this->results['places'])) {
-                        $this->prepareSaveState($citySlug);
-                    }
-                } catch (\Exception $e) {
-                    Logger::error('Search failed', ['error' => $e->getMessage()]);
-                    $this->error = $this->selectedCategory .'در' .$this->selectedCity . ' یافت نشد';
-                }
+            // Google Map search is temporarily disabled: explain in Persian
+            // instead of running a search that cannot return results.
+            if ($this->selectedCity && !isset($_POST['action'])) {
+                $this->results = null;
+                $this->error = 'جستجو با گوگل‌مپ در حال حاضر غیرفعال است. لطفاً از بلد، نشان یا دیوار استفاده کنید.';
             }
         }
     }
