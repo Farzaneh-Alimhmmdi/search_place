@@ -3,7 +3,7 @@
 ## General Rules
 
 ### 1. Provider Selection
-- Users must select one provider from the available list: بلد, نشان, دیوار, گوگل مپ
+- Users must select one provider from the available list: بلد, نشان, مکانچی, ویلایار, دیوار, گوگل مپ
 - Each provider has its own API endpoint and data structure
 - The selected provider determines which search service is used
 

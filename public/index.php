@@ -36,6 +36,10 @@ if ($route === '/divar_collect') {
 } elseif ($route === '/search_place' || $route === '/' || $route === '') {
     if ($provider === 'neshan') {
         require_once __DIR__ . '/../src/Controller/NeshanController.php';
+    } elseif ($provider === 'makanchi') {
+        require_once __DIR__ . '/../src/Controller/MakanchiController.php';
+    } elseif ($provider === 'vilayar') {
+        require_once __DIR__ . '/../src/Controller/VilayarController.php';
     } elseif ($provider === 'google_map') {
         require_once __DIR__ . '/../src/Controller/GoogleMapController.php';
     } elseif ($provider === 'divar') {

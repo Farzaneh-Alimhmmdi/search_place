@@ -96,6 +96,95 @@ final class CurlHttpClient
     public function getLastStatusCode(): int { return $this->lastStatusCode; }
 
     /**
+     * Perform a GET (or form POST) request and return the raw response body.
+     *
+     * Unlike get(), the body is NOT expected to be JSON (used for HTML pages).
+     *
+     * @param array $options ['POST' => string|array form fields, 'timeout' => int,
+     *                        'follow' => bool follow redirects (default true)]
+     * @return array ['success' => bool, 'body' => string, 'final_url' => string,
+     *                'http_code' => int, 'error' => string|null]
+     */
+    public function getRaw(string $url, array $options = []): array
+    {
+        $attempt = 0;
+        $lastError = '';
+        $timeout = (int) ($options['timeout'] ?? $this->timeout);
+        $follow = array_key_exists('follow', $options) ? (bool) $options['follow'] : true;
+
+        while ($attempt <= $this->maxRetries) {
+            if ($attempt > 0 && $this->delay > 0) {
+                usleep((int)($this->delay * 1000000));
+            }
+
+            $ch = curl_init();
+            curl_setopt_array($ch, [
+                CURLOPT_URL => $url,
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_TIMEOUT => $timeout,
+                CURLOPT_CONNECTTIMEOUT => $this->connectTimeout,
+                CURLOPT_USERAGENT => $this->userAgent,
+                CURLOPT_FOLLOWLOCATION => $follow,
+                CURLOPT_MAXREDIRS => 5,
+                CURLOPT_SSL_VERIFYPEER => true,
+                CURLOPT_HTTPHEADER => array_map(fn($k, $v) => "$k: $v", array_keys($this->headers), $this->headers),
+            ]);
+
+            if (array_key_exists('POST', $options) && $options['POST'] !== null) {
+                curl_setopt($ch, CURLOPT_POST, true);
+                curl_setopt($ch, CURLOPT_POSTFIELDS, $options['POST']);
+            }
+
+            $response = curl_exec($ch);
+            $this->lastStatusCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $finalUrl = (string) curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
+            $error = curl_error($ch);
+            curl_close($ch);
+
+            if ($error) {
+                $lastError = $error;
+                Logger::warning("HTTP request failed (attempt $attempt): $error", ['url' => $url]);
+                $attempt++;
+                continue;
+            }
+
+            if ($this->lastStatusCode >= 200 && $this->lastStatusCode < 300) {
+                return [
+                    'success' => true,
+                    'body' => (string) $response,
+                    'final_url' => $finalUrl !== '' ? $finalUrl : $url,
+                    'http_code' => $this->lastStatusCode,
+                    'error' => null,
+                ];
+            }
+
+            if ($this->lastStatusCode >= 429 || $this->lastStatusCode >= 500) {
+                $lastError = "HTTP $this->lastStatusCode";
+                Logger::warning("HTTP retryable error: $this->lastStatusCode for $url");
+                $attempt++;
+                continue;
+            }
+
+            return [
+                'success' => false,
+                'body' => '',
+                'final_url' => $url,
+                'http_code' => $this->lastStatusCode,
+                'error' => "HTTP request failed with status $this->lastStatusCode for URL: $url",
+            ];
+        }
+
+        Logger::error("HTTP request failed after $attempt attempts", ['url' => $url, 'error' => $lastError]);
+        return [
+            'success' => false,
+            'body' => '',
+            'final_url' => $url,
+            'http_code' => $this->lastStatusCode,
+            'error' => "HTTP request failed after $attempt attempts: $lastError",
+        ];
+    }
+
+    /**
      * Perform a POST request with custom headers.
      *
      * @param string $url

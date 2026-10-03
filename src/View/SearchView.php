@@ -72,6 +72,10 @@ final class SearchView
     {
         if ($this->provider === 'neshan') {
             $providerLabel = 'نشان';
+        } elseif ($this->provider === 'makanchi') {
+            $providerLabel = 'مکانچی';
+        } elseif ($this->provider === 'vilayar') {
+            $providerLabel = 'ویلایار';
         } elseif ($this->provider === 'google_map') {
             $providerLabel = 'گوگل';
         } elseif ($this->provider === 'divar') {
@@ -244,6 +248,8 @@ final class SearchView
                 }
                 .provider-balad { background: #e8f0fe; color: #1a73e8; }
                 .provider-neshan { background: #f3e8ff; color: #9c27b0; }
+                .provider-makanchi { background: #e0f2f1; color: #00695c; }
+                .provider-vilayar { background: #fff3e0; color: #e65100; }
                 .provider-google_map { background: #e6f4ea; color: #1e7e34; }
                 .provider-divar { background: #fff4e5; color: #e67e22; }
 
@@ -636,6 +642,73 @@ final class SearchView
                     box-shadow: 0 4px 12px rgba(26, 115, 232, 0.35);
                 }
 
+                /* Makanchi waiting overlay (long search: list + per-card phones) */
+                .waiting-overlay {
+                    display: none;
+                    position: fixed;
+                    inset: 0;
+                    background: rgba(26, 26, 46, 0.55);
+                    backdrop-filter: blur(3px);
+                    z-index: 10001;
+                    align-items: center;
+                    justify-content: center;
+                }
+                .waiting-overlay.open { display: flex; }
+                .waiting-card {
+                    background: #fff;
+                    border-radius: 20px;
+                    padding: 40px 48px;
+                    text-align: center;
+                    max-width: 380px;
+                    width: 88%;
+                    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+                }
+                .waiting-spinner {
+                    width: 54px;
+                    height: 54px;
+                    margin: 0 auto 18px;
+                    border: 5px solid #e0f2f1;
+                    border-top-color: #009688;
+                    border-radius: 50%;
+                    animation: spin 0.9s linear infinite;
+                }
+                .waiting-title {
+                    font-size: 17px;
+                    font-weight: 700;
+                    color: #1a1a2e;
+                    margin-bottom: 8px;
+                }
+                .waiting-message {
+                    font-size: 14px;
+                    color: #555;
+                    min-height: 44px;
+                }
+                .waiting-timer {
+                    margin-top: 14px;
+                    font-size: 13px;
+                    color: #888;
+                }
+                .waiting-timer strong { color: #009688; }
+                .waiting-bar-track {
+                    height: 8px;
+                    background: #eef1f4;
+                    border-radius: 999px;
+                    overflow: hidden;
+                    margin-top: 16px;
+                }
+                .waiting-bar-fill {
+                    height: 100%;
+                    width: 30%;
+                    border-radius: 999px;
+                    background: linear-gradient(90deg, #009688, #4db6ac, #009688);
+                    background-size: 200% 100%;
+                    animation: slide 1.4s linear infinite;
+                }
+                @keyframes slide {
+                    0% { transform: translateX(180%); }
+                    100% { transform: translateX(-320%); }
+                }
+
                 /* Responsive */
                 @media (max-width: 600px) {
                     .container { padding: 16px 12px; }
@@ -676,6 +749,8 @@ final class SearchView
                             <select name="provider" id="providerSelect">
                                 <option value="balad" <?= ($this->provider === 'balad') ? 'selected' : '' ?>>بلد</option>
                                 <option value="neshan" <?= ($this->provider === 'neshan') ? 'selected' : '' ?>>نشان</option>
+                                <option value="makanchi" <?= ($this->provider === 'makanchi') ? 'selected' : '' ?>>مکانچی</option>
+                                <option value="vilayar" <?= ($this->provider === 'vilayar') ? 'selected' : '' ?>>ویلایار</option>
                                 <option value="google_map" <?= ($this->provider === 'google_map') ? 'selected' : '' ?>>گوگل‌مپ</option>
                                 <option value="divar" <?= ($this->provider === 'divar') ? 'selected' : '' ?>>دیوار</option>
                             </select>
@@ -760,6 +835,35 @@ final class SearchView
                 </form>
             </div>
 
+            <?php if ($this->provider === 'makanchi' || $this->provider === 'vilayar'): ?>
+                <?php
+                $waitLines = $this->provider === 'vilayar'
+                    ? [
+                        'در حال اتصال به ویلایار…',
+                        'داریم لیست ویلاها را می‌گیریم… 🏡',
+                        'تک‌تک شماره تماس‌ها را برمی‌داریم… 📞',
+                        'کمی صبر کنید، داریم بهترین‌ها را جمع می‌کنیم… ✨',
+                        'نزدیک شدیم، چند لحظه‌ی دیگر… ⏳',
+                    ]
+                    : [
+                        'در حال اتصال به مکانچی…',
+                        'داریم لیست اقامتگاه‌ها را می‌گیریم… 🏠',
+                        'تک‌تک شماره تماس‌ها را برمی‌داریم… 📞',
+                        'کمی صبر کنید، داریم بهترین‌ها را جمع می‌کنیم… ✨',
+                        'نزدیک شدیم، چند لحظه‌ی دیگر… ⏳',
+                    ];
+                ?>
+                <div class="waiting-overlay" id="waitingOverlay">
+                    <div class="waiting-card">
+                        <div class="waiting-spinner"></div>
+                        <div class="waiting-title">داریم برایتان اقامتگاه پیدا می‌کنیم</div>
+                        <div class="waiting-message" id="waitingMessage"><?= htmlspecialchars($waitLines[0]) ?></div>
+                        <div class="waiting-bar-track"><div class="waiting-bar-fill"></div></div>
+                        <div class="waiting-timer">زمان سپری‌شده: <strong id="waitingSeconds">۰ ثانیه</strong></div>
+                    </div>
+                </div>
+            <?php endif; ?>
+
             <?php if ($this->provider === 'google_map'): ?>
                 <div class="provider-disabled">
                     <div class="provider-disabled-icon">🗺️</div>
@@ -769,6 +873,8 @@ final class SearchView
                     <div class="provider-switch-row">
                         <button type="button" class="switch-provider-btn" data-provider="balad">بلد</button>
                         <button type="button" class="switch-provider-btn" data-provider="neshan">نشان</button>
+                        <button type="button" class="switch-provider-btn" data-provider="makanchi">مکانچی</button>
+                        <button type="button" class="switch-provider-btn" data-provider="vilayar">ویلایار</button>
                         <button type="button" class="switch-provider-btn" data-provider="divar">دیوار</button>
                     </div>
                 </div>
@@ -864,7 +970,7 @@ final class SearchView
                                     <div class="result-header">
                                         <h3 class="result-name"><?= htmlspecialchars($place['name']) ?></h3>
                                         <span class="provider-tag provider-<?= $this->provider ?>">
-                                                <?= $this->provider === 'balad' ? 'بلد' : ($this->provider === 'neshan' ? 'نشان' : ($this->provider === 'google_map' ? 'گوگل' : 'دیوار')) ?>
+                                                <?= $this->provider === 'balad' ? 'بلد' : ($this->provider === 'neshan' ? 'نشان' : ($this->provider === 'makanchi' ? 'مکانچی' : ($this->provider === 'vilayar' ? 'ویلایار' : ($this->provider === 'google_map' ? 'گوگل' : 'دیوار')))) ?>
                                             </span>
                                     </div>
 
@@ -942,6 +1048,14 @@ final class SearchView
                                         <?php elseif ($this->provider === 'neshan' && !empty($place['neshan_url'])): ?>
                                             <a href="<?= htmlspecialchars($place['neshan_url']) ?>" target="_blank" class="btn-link btn-link-secondary">
                                                 مشاهده در نشان ↗
+                                            </a>
+                                        <?php elseif ($this->provider === 'makanchi' && !empty($place['makanchi_url'])): ?>
+                                            <a href="<?= htmlspecialchars($place['makanchi_url']) ?>" target="_blank" class="btn-link btn-link-secondary">
+                                                مشاهده در مکانچی ↗
+                                            </a>
+                                        <?php elseif ($this->provider === 'vilayar' && !empty($place['vilayar_url'])): ?>
+                                            <a href="<?= htmlspecialchars($place['vilayar_url']) ?>" target="_blank" class="btn-link btn-link-secondary">
+                                                مشاهده در ویلایار ↗
                                             </a>
                                         <?php endif; ?>
 
@@ -1462,6 +1576,69 @@ final class SearchView
                 if (provinceSelect) {
                     provinceSelect.addEventListener('change', function() {
                         updateCities(this.value);
+                    });
+                }
+
+                // Makanchi waiting overlay: the search fans out to ~30 detail
+                // fetches, so keep the user company while the page loads.
+                var waitingOverlay = document.getElementById('waitingOverlay');
+                if (waitingOverlay && form) {
+                    var waitingMessage = document.getElementById('waitingMessage');
+                    var waitingSeconds = document.getElementById('waitingSeconds');
+                    var waitLines = <?= json_encode($waitLines ?? [], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
+                    var faDigits = function (n) {
+                        return String(n).replace(/[0-9]/g, function (d) {
+                            return '۰۱۲۳۴۵۶۷۸۹'[+d];
+                        });
+                    };
+                    var waitingStarted = false;
+                    var openWaiting = function () {
+                        if (waitingStarted) {
+                            return;
+                        }
+                        waitingStarted = true;
+                        waitingOverlay.classList.add('open');
+                        var line = 0;
+                        var elapsed = 0;
+                        if (waitingMessage) {
+                            waitingMessage.textContent = waitLines[0];
+                        }
+                        setInterval(function () {
+                            line = (line + 1) % waitLines.length;
+                            if (waitingMessage) {
+                                waitingMessage.textContent = waitLines[line];
+                            }
+                        }, 6000);
+                        setInterval(function () {
+                            elapsed += 1;
+                            if (waitingSeconds) {
+                                waitingSeconds.textContent = faDigits(elapsed) + ' ثانیه';
+                            }
+                        }, 1000);
+                    };
+                    form.addEventListener('submit', openWaiting);
+                    // Programmatic form.submit() bypasses the submit event entirely
+                    // (e.g. provider auto-switch), so patch it as well.
+                    var nativeFormSubmit = HTMLFormElement.prototype.submit;
+                    HTMLFormElement.prototype.submit = function () {
+                        if (this && this.id === 'searchForm' && document.getElementById('waitingOverlay')) {
+                            openWaiting();
+                        }
+                        return nativeFormSubmit.apply(this, arguments);
+                    };
+                    // Button-click path: covers the case where the submit event
+                    // itself never fires, without showing on validation errors.
+                    var searchSubmitBtn = form.querySelector('button[type="submit"]');
+                    if (searchSubmitBtn) {
+                        searchSubmitBtn.addEventListener('click', function () {
+                            if (form.checkValidity()) {
+                                openWaiting();
+                            }
+                        });
+                    }
+                    // Back/forward cache: never leave the overlay stuck open.
+                    window.addEventListener('pageshow', function () {
+                        waitingOverlay.classList.remove('open');
                     });
                 }
 

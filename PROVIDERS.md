@@ -31,8 +31,8 @@ undocumented endpoints can change without notice.
 | Neshan (نشان) | Live | Internal encoded API (our `neshan_search.py` hits `pwa-api`) | None (no key; `uuid` header only) | In search response (`actions[type=CALL]`) | ✅ In use | — |
 | Google Map (گوگل‌مپ) | Live | Official REST if key present, else scraping fallback | API key for reliable mode | Via Places Details (key mode) | ✅ In use (needs key for quality) | — |
 | Divar (دیوار) | Live | Internal JSON API (`api.divar.ir/v8/...`, cursor pagination) | None for search; login cookies (OTP) for phones | Via `contact_info` endpoint after OTP login | ✅ In use | — |
-| Vilayar (ویلایار) | Candidate (probed ✓) | AJAX hybrid | None (session + page token) | Public on detail page, no login | ✅ Addable | Medium |
-| Makanchi (مکانچی) | Candidate (probed ✓) | Server HTML scrape | None | Public `tel:` on detail page, no login | ✅ Addable | Small |
+| Vilayar (ویلایار) | Live | AJAX hybrid (plain HTML pages + per-card detail) | None | Public `tel:` on detail page, no login | ✅ In use | — |
+| Makanchi (مکانچی) | Live | Server HTML scrape | None | Public `tel:` on detail page, no login | ✅ In use | — |
 | Eforosh (ای‌فروش) | Candidate (probed ✓) | Server HTML scrape | None | Plain text in list HTML | ⚠️ Addable, thin inventory | Small–Medium |
 | Mrestate (مستراستیت/آقای املاک) | Candidate (probed ✓) | Internal JSON API (Next.js `/_next/data`) | None for search; login likely for full phones | Masked (`0912***…`) until reveal/login | ⚠️ Addable, phone blocked | Medium |
 | Behtarino (بهترینو) | Candidate (probed ✓) | Server HTML scrape | None | Embedded in detail JSON/meta, no login | ⚠️ Addable, low value (no prices) | Medium |
@@ -99,42 +99,38 @@ undocumented endpoints can change without notice.
   (step-wise harvest into `accommodations`, resumable via `HarvestJobStore`, schema auto-applied).
 - **Notes:** The most complex provider; its collect pipeline is Divar-specific.
 
-## 5. Vilayar (ویلایار) — candidate, probed ✓
+## 5. Vilayar (ویلایار) — live
 
-- **Site:** Villa/Bookmark-style rental marketplace (`vilayar.com`). High relevance.
-- **Type:** AJAX hybrid. Page 1 is server HTML (20 `article.vila` cards baked in);
-  pages 2+ are JSON from the **same** `/search?...` URL plus
-  `{_token, ajaxRequestType: "villaList", seed: "42546"}` and header
-  `X-Requested-With: XMLHttpRequest` (verified live: 40 items on page 2 for مازندران).
-- **Token:** Per-session CSRF from `input[name=_token]` — client must `GET` the page first
-  (keeping cookies), extract the token, then call JSON. `seed` is hardcoded in their JS.
-- **Record fields:** `id, villa_title, cityTitle, rent_daily_price_from, finalPrice,
-  has_discount, avgScore, bed/bedroom counts, foundation_area, latitude, longitude,
-  villa_address, villa_slug, villa_type_id, estate_type, main_img_dir`, … (~50 fields).
-- **Pagination:** `?page=N` (HTML count 20 vs JSON count ~40 — dedupe by `id`).
-- **Phone:** Public on `/VillaDetails/{id}`, no login: `tel://09369611987`, SMS link,
-  owner name + villa code in `.box-property` (verified on id `1885`).
-- **Categories:** DECIDED — use Vilayar's own types when selected (like Divar does):
-  جنگلی=1، ساحلی=2، ییلاقی=3، شهرکی=5، کوهستانی=6، استخردار=7، چسبیده‌به‌دریا=8،
-  شهری=9، روستایی=10، اجاره‌سال=11 (+ `estateType=1` = اجاره ویلا).
-- **City mapping needed:** Persian city → vilayar numeric `(state, city)` pairs
-  (e.g. مازندران=89، سوادکوه=340، تهران=71). Same role as `cities.json` for Divar.
-- **Phone mode (open):** on-demand button (like Divar `get_phone`) vs eager detail fetch
-  per card (20 extra requests/page — slow). On-demand recommended.
-- **Verdict:** ✅ Addable, medium effort. Plain HTTP (`requests`/cURL), no browser, no key.
+- **Site:** Villa rental marketplace, province-based search (`/search?state={id}`).
+- **Type:** AJAX hybrid, but only the plain-HTML half is used: fully server-rendered
+  cards (`article.vila`), no session or token needed. (The JSON `ajaxRequestType=villaList`
+  path exists but is unnecessary — plain `?page=N` renders full pages.)
+- **Record fields:** title, `place` (province - city), nightly price, rating
+  (`data-score`), beds/guests/rooms/area specs, image, `/VillaDetails/{id}` link.
+- **Pagination:** classic `?page=N`.
+- **Phone:** public `tel:` + owner name on detail pages, no login; fetched eagerly
+  per card (~200ms apart, 15s per-detail budget, PHP limit raised to 180s).
+- **Categories:** Vilayar's own 10 villa types (`config/vilayar.php`).
+- **City mapping:** every province via `config/vilayar/states.json` (all 31 covered,
+  read off the site's own dropdown); no city table needed.
+- **Code:** `src/Vilayar/{VilayarClient,VilayarSearchService}.php` + `VilayarController`
+  (mirrors `MakanchiController` + call logging); parser covered by `tests/vilayar_parse.php`.
 
-## 6. Makanchi (مکانچی) — candidate, probed ✓
+## 6. Makanchi (مکانچی) — live
 
-- **Site:** Non-hotel stays (villa, suite, ecolodge/bomgardi, cottage) with nightly prices. High relevance.
-- **Type:** Server HTML scrape. Stable URL schemes: cities `List-Tehran-1` / `List-Isfahan-79`,
-  types `List-villa` / `List-ecolodge` / `List-studio` / `List-apartments` / `List-cottage` /
-  `List-rural-house`, query filters (`minPriceRange, maxPriceRange, minBedRoomCount, minCapacity`).
-- **Pagination:** Classic numbered links, ~30/page, param name is Persian: `?صفحه=2`.
-- **Phone:** Not in lists; fully visible on detail pages (`/{Type}/{id}-{slug}`),
-  e.g. `تماس بگیرید 09127197303 (مهین قدیری)` as `tel:` link. No login.
-- **Auth/anti-bot:** None observed. All fetches succeeded.
-- **Mapping needed:** Makanchi city IDs (`Tehran-1`, `Ramsar-392`, …).
-- **Verdict:** ✅ Addable, small effort. Easiest candidate: plain HTTP scrape, open phones.
+- **Site:** Non-hotel stays (villa, suite, ecolodge/bomgardi, cottage) with nightly prices.
+- **Type:** Server HTML scrape. City resolution is dynamic (no city table):
+  `POST /Search/SearchForm` (keyword) follows to the canonical list URL
+  (`/List-Tehran-1`, `/List-Sari-376`, or `/List?جستجوی=…` for provinces).
+  Filters append as query params: `?Category={type}&صفحه={page}` (both verified live).
+- **Record fields:** title, city badge, nightly price text, capacity/rooms, image,
+  detail link `/{Type}/{id}-{slug}`; phones via per-card detail fetch (`tel:` link, no login).
+- **Pagination:** `?صفحه=N` (Persian param), ~30 cards/page; highest page parsed from links.
+- **Categories:** Makanchi's own 12 types (`config/makanchi.php`), shown when selected.
+- **Phone mode:** fetched during search (one detail request per card, ~200ms apart,
+  15s per-detail budget, PHP limit raised to 120s for the search).
+- **Code:** `src/Makanchi/{MakanchiClient,MakanchiSearchService}.php` + `MakanchiController`
+  (mirrors `NeshanController` + call logging); parser covered by `tests/makanchi_parse.php`.
 
 ## 7. Eforosh (ای‌فروش) — candidate, probed ✓
 
@@ -223,9 +219,9 @@ Mirrors how Neshan (closest analog: web-origin data + phone) was added:
 9. `tests/` — mocked search/phone cases (DB + HTTP mocked, no credentials).
 10. README + this file — document the new provider.
 
-## Open decisions (Vilayar)
+## Open decisions (Vilayar — resolved)
 
-1. ~~Categories~~ — decided: Vilayar's own types when selected.
-2. City coverage — all provinces at once, or north (مازندران/گیلان) + تهران first?
-   (Needs the state→city ID table built per covered province.)
-3. Phone mode — on-demand button (recommended, Divar-style) or eager per-card fetch?
+1. Categories — Vilayar's own 10 villa types when selected. ✅
+2. City coverage — all 31 provinces via `config/vilayar/states.json` (state-level
+   search, no city table needed). ✅
+3. Phone mode — eager per-card fetch (like Makanchi). ✅
