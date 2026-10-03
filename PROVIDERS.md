@@ -35,7 +35,7 @@ undocumented endpoints can change without notice.
 | Makanchi (مکانچی) | Live | Server HTML scrape | None | Public `tel:` on detail page, no login | ✅ In use | — |
 | Eforosh (ای‌فروش) | Candidate (probed ✓) | Server HTML scrape | None | Plain text in list HTML | ⚠️ Addable, thin inventory | Small–Medium |
 | Mrestate (مستراستیت/آقای املاک) | Candidate (probed ✓) | Internal JSON API (Next.js `/_next/data`) | None for search; login likely for full phones | Masked (`0912***…`) until reveal/login | ⚠️ Addable, phone blocked | Medium |
-| Behtarino (بهترینو) | Candidate (probed ✓) | Server HTML scrape | None | Embedded in detail JSON/meta, no login | ⚠️ Addable, low value (no prices) | Medium |
+| Behtarino (بهترینو) | Live | Server HTML scrape (JSON-LD + per-card detail) | None | Embedded in detail data/meta, no login | ✅ In use | — |
 | Niazerooz (نیازروز) | Candidate (probed ✓) | Server HTML scrape | None, but JS-gate blocks plain HTTP | Public `tel:` on detail page, no login | ⚠️ Needs browser/JS-capable fetch | Medium |
 | Istgah (ایستگاه) | Candidate (probed ✓) | Unknown (all server fetches refused) | Unknown | Unknown | ❌ Not feasible now | Large / risky |
 
@@ -160,17 +160,23 @@ undocumented endpoints can change without notice.
 - **Verdict:** ⚠️ Addable for listings (medium), but pointless for this app until the
   phone-reveal flow is cracked. Park unless a login session can be arranged.
 
-## 9. Behtarino (بهترینو) — candidate, probed ✓
+## 9. Behtarino (بهترینو) — live
 
-- **Site:** Local-business directory/reviews (2M businesses), Next.js SSR. Has `اقامتگاه`
-  (`/r/اقامتگاه/تهران`, sub `/r/اقامتگاه-بومگردی/تهران`) but mixes hotels, مسافرخانه،
-  خوابگاه — mostly cheap guesthouses, **no prices anywhere**. Relevance medium–low.
-- **Type:** Server HTML scrape, `?page=N`, 20/page.
-- **Phone:** Detail-only, behind a "مشاهده شماره تماس" button — but the number is embedded
-  in SSR data (`"phoneNumbers":["09384096996",…]`, meta description, WhatsApp link),
-  so no extra call or login needed. Address + lat/lng also embedded.
-- **Verdict:** ⚠️ Scraping is easy (medium: two-step crawl), but no prices and noisy
-  categories make it low value here. Skip unless price becomes optional.
+- **Site:** Local-business directory with an `اقامتگاه` section (guesthouses, suites,
+  ecolodges) plus `اقامتگاه-بومگردی`, `مراکز-اقامتی`, `متل`. No prices anywhere.
+- **Type:** Server HTML scrape. List pages (`/r/{type}/{city}?page=N`, 20/page)
+  embed listings as JSON-LD `ItemList` (name, full address, geo, rating, images,
+  `/p/{hash}` detail URL) — parsed directly, no fragile card scraping.
+- **Cities:** the site has no province pages, so each province maps to 1–3 cities
+  (`config/behtarino/cities.json`, every slug verified live); city results are
+  merged and deduplicated per page.
+- **Phone:** detail-only, embedded in the page (`"phoneNumbers":[…]` data first,
+  then meta description `تلفن: …`), no login and no extra endpoint. Fetched eagerly
+  per card (~200ms apart, 15s per-detail budget, PHP limit raised to 240s).
+- **Categories:** Behtarino's own 4 sections (`config/behtarino.php`).
+- **Code:** `src/Behtarino/{BehtarinoClient,BehtarinoSearchService}.php` +
+  `BehtarinoController` (call logging + save flow included);
+  parser covered by `tests/behtarino_parse.php`.
 
 ## 10. Niazerooz (نیازروز) — candidate, probed ✓
 

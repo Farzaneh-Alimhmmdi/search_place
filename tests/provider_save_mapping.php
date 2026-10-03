@@ -50,4 +50,24 @@ expectSame('makanchi_242', ProviderAccommodationMapper::externalId('makanchi', $
 expectSame('vilayar_2188', ProviderAccommodationMapper::externalId('vilayar', $vilayarPlace), 'externalId helper');
 echo "PASS: external id helpers\n";
 
+$behtarinoPlace = [
+    'id' => 'behtarino_wezvcbqqbq',
+    'token' => 'behtarino_wezvcbqqbq',
+    'name' => 'مهمانپذیر شیرون',
+    'address' => 'محله مهران، سید خندان، تهران',
+    'telephone' => '02126722161',
+    'price' => null,
+    'image_preview' => 'https://hs3.behtarino.com/media/x.jpeg',
+    'behtarino_url' => 'https://behtarino.com/p/wezvcbqqbq~x',
+    'category' => 'اقامتگاه',
+    'rating' => 2.0,
+];
+$row = ProviderAccommodationMapper::toRow('behtarino', $behtarinoPlace, ['city' => 'تهران', 'category' => 'اقامتگاه', 'page' => 1]);
+expectSame('behtarino', $row['provider'], 'provider stored');
+expectSame('behtarino_wezvcbqqbq', $row['external_id'], 'external id');
+expectSame('https://behtarino.com/p/wezvcbqqbq~x', $row['url'], 'detail url kept');
+expectSame('محله مهران، سید خندان، تهران', $row['address'], 'address kept');
+expectSame('behtarino_wezvcbqqbq', ProviderAccommodationMapper::externalId('behtarino', $behtarinoPlace), 'externalId helper');
+echo "PASS: behtarino save mapping\n";
+
 echo "All provider save-mapping tests passed.\n";

@@ -10,7 +10,7 @@ use Src\Divar\DivarAdMapper;
  */
 final class ProviderAccommodationMapper
 {
-    public const PROVIDERS = ['balad', 'neshan', 'google_map', 'divar', 'makanchi', 'vilayar'];
+    public const PROVIDERS = ['balad', 'neshan', 'google_map', 'divar', 'makanchi', 'vilayar', 'behtarino'];
 
     /**
      * Resolve the same provider-scoped ID for rendering, session validation,
@@ -94,7 +94,7 @@ final class ProviderAccommodationMapper
             $place['title'] ?? null,
             $raw['name'] ?? null,
             $raw['title'] ?? null,
-        ]) ?? ($provider === 'neshan' ? 'مکان نشان ' : ($provider === 'makanchi' ? 'مکان مکانچی ' : ($provider === 'vilayar' ? 'مکان ویلایار ' : 'مکان گوگل '))) . $externalId;
+        ]) ?? ($provider === 'neshan' ? 'مکان نشان ' : ($provider === 'makanchi' ? 'مکان مکانچی ' : ($provider === 'vilayar' ? 'مکان ویلایار ' : ($provider === 'behtarino' ? 'مکان بهترینو ' : 'مکان گوگل ')))) . $externalId;
         $telephone = self::firstString([
             $place['telephone'] ?? null,
             $place['phone'] ?? null,
@@ -119,6 +119,7 @@ final class ProviderAccommodationMapper
             $place['neshan_url'] ?? null,
             $place['makanchi_url'] ?? null,
             $place['vilayar_url'] ?? null,
+            $place['behtarino_url'] ?? null,
             $place['url'] ?? null,
         ]);
 

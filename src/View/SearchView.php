@@ -76,6 +76,8 @@ final class SearchView
             $providerLabel = 'مکانچی';
         } elseif ($this->provider === 'vilayar') {
             $providerLabel = 'ویلایار';
+        } elseif ($this->provider === 'behtarino') {
+            $providerLabel = 'بهترینو';
         } elseif ($this->provider === 'google_map') {
             $providerLabel = 'گوگل';
         } elseif ($this->provider === 'divar') {
@@ -250,6 +252,7 @@ final class SearchView
                 .provider-neshan { background: #f3e8ff; color: #9c27b0; }
                 .provider-makanchi { background: #e0f2f1; color: #00695c; }
                 .provider-vilayar { background: #fff3e0; color: #e65100; }
+                .provider-behtarino { background: #fce4ec; color: #c2185b; }
                 .provider-google_map { background: #e6f4ea; color: #1e7e34; }
                 .provider-divar { background: #fff4e5; color: #e67e22; }
 
@@ -751,6 +754,7 @@ final class SearchView
                                 <option value="neshan" <?= ($this->provider === 'neshan') ? 'selected' : '' ?>>نشان</option>
                                 <option value="makanchi" <?= ($this->provider === 'makanchi') ? 'selected' : '' ?>>مکانچی</option>
                                 <option value="vilayar" <?= ($this->provider === 'vilayar') ? 'selected' : '' ?>>ویلایار</option>
+                                <option value="behtarino" <?= ($this->provider === 'behtarino') ? 'selected' : '' ?>>بهترینو</option>
                                 <option value="google_map" <?= ($this->provider === 'google_map') ? 'selected' : '' ?>>گوگل‌مپ</option>
                                 <option value="divar" <?= ($this->provider === 'divar') ? 'selected' : '' ?>>دیوار</option>
                             </select>
@@ -835,23 +839,17 @@ final class SearchView
                 </form>
             </div>
 
-            <?php if ($this->provider === 'makanchi' || $this->provider === 'vilayar'): ?>
+            <?php if (in_array($this->provider, ['makanchi', 'vilayar', 'behtarino'], true)): ?>
                 <?php
-                $waitLines = $this->provider === 'vilayar'
-                    ? [
-                        'در حال اتصال به ویلایار…',
-                        'داریم لیست ویلاها را می‌گیریم… 🏡',
-                        'تک‌تک شماره تماس‌ها را برمی‌داریم… 📞',
-                        'کمی صبر کنید، داریم بهترین‌ها را جمع می‌کنیم… ✨',
-                        'نزدیک شدیم، چند لحظه‌ی دیگر… ⏳',
-                    ]
-                    : [
-                        'در حال اتصال به مکانچی…',
-                        'داریم لیست اقامتگاه‌ها را می‌گیریم… 🏠',
-                        'تک‌تک شماره تماس‌ها را برمی‌داریم… 📞',
-                        'کمی صبر کنید، داریم بهترین‌ها را جمع می‌کنیم… ✨',
-                        'نزدیک شدیم، چند لحظه‌ی دیگر… ⏳',
-                    ];
+                $waitProviderFa = $this->provider === 'vilayar' ? 'ویلایار'
+                    : ($this->provider === 'behtarino' ? 'بهترینو' : 'مکانچی');
+                $waitLines = [
+                    'در حال اتصال به ' . $waitProviderFa . '…',
+                    'داریم لیست اقامتگاه‌ها را می‌گیریم… 🏠',
+                    'تک‌تک شماره تماس‌ها را برمی‌داریم… 📞',
+                    'کمی صبر کنید، داریم بهترین‌ها را جمع می‌کنیم… ✨',
+                    'نزدیک شدیم، چند لحظه‌ی دیگر… ⏳',
+                ];
                 ?>
                 <div class="waiting-overlay" id="waitingOverlay">
                     <div class="waiting-card">
@@ -875,6 +873,7 @@ final class SearchView
                         <button type="button" class="switch-provider-btn" data-provider="neshan">نشان</button>
                         <button type="button" class="switch-provider-btn" data-provider="makanchi">مکانچی</button>
                         <button type="button" class="switch-provider-btn" data-provider="vilayar">ویلایار</button>
+                        <button type="button" class="switch-provider-btn" data-provider="behtarino">بهترینو</button>
                         <button type="button" class="switch-provider-btn" data-provider="divar">دیوار</button>
                     </div>
                 </div>
@@ -970,7 +969,7 @@ final class SearchView
                                     <div class="result-header">
                                         <h3 class="result-name"><?= htmlspecialchars($place['name']) ?></h3>
                                         <span class="provider-tag provider-<?= $this->provider ?>">
-                                                <?= $this->provider === 'balad' ? 'بلد' : ($this->provider === 'neshan' ? 'نشان' : ($this->provider === 'makanchi' ? 'مکانچی' : ($this->provider === 'vilayar' ? 'ویلایار' : ($this->provider === 'google_map' ? 'گوگل' : 'دیوار')))) ?>
+                                                <?= $this->provider === 'balad' ? 'بلد' : ($this->provider === 'neshan' ? 'نشان' : ($this->provider === 'makanchi' ? 'مکانچی' : ($this->provider === 'vilayar' ? 'ویلایار' : ($this->provider === 'behtarino' ? 'بهترینو' : ($this->provider === 'google_map' ? 'گوگل' : 'دیوار'))))) ?>
                                             </span>
                                     </div>
 
@@ -1056,6 +1055,10 @@ final class SearchView
                                         <?php elseif ($this->provider === 'vilayar' && !empty($place['vilayar_url'])): ?>
                                             <a href="<?= htmlspecialchars($place['vilayar_url']) ?>" target="_blank" class="btn-link btn-link-secondary">
                                                 مشاهده در ویلایار ↗
+                                            </a>
+                                        <?php elseif ($this->provider === 'behtarino' && !empty($place['behtarino_url'])): ?>
+                                            <a href="<?= htmlspecialchars($place['behtarino_url']) ?>" target="_blank" class="btn-link btn-link-secondary">
+                                                مشاهده در بهترینو ↗
                                             </a>
                                         <?php endif; ?>
 

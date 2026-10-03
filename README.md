@@ -9,6 +9,7 @@ The following providers are available for selection:
 - نشان (Neshan)
 - مکانچی (Makanchi)
 - ویلایار (Vilayar)
+- بهترینو (Behtarino)
 - دیوار (Divar)
 - گوگل مپ (Google Maps)
 
@@ -256,6 +257,7 @@ Configuration files include:
 - `config/divar.php`: Divar settings, including the `collect` block
 - `config/makanchi.php`: Makanchi settings (own categories, detail-fetch budget)
 - `config/vilayar.php` + `config/vilayar/states.json`: Vilayar settings (own villa types, province→state map)
+- `config/behtarino.php` + `config/behtarino/cities.json`: Behtarino settings (own sections, province→cities map)
 - `database/schema.sql`: Database schema (`contacts`, `accommodations`, `call_logs`)
 - `.env`: Environment variables for database and application settings
 

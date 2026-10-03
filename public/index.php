@@ -40,6 +40,8 @@ if ($route === '/divar_collect') {
         require_once __DIR__ . '/../src/Controller/MakanchiController.php';
     } elseif ($provider === 'vilayar') {
         require_once __DIR__ . '/../src/Controller/VilayarController.php';
+    } elseif ($provider === 'behtarino') {
+        require_once __DIR__ . '/../src/Controller/BehtarinoController.php';
     } elseif ($provider === 'google_map') {
         require_once __DIR__ . '/../src/Controller/GoogleMapController.php';
     } elseif ($provider === 'divar') {
