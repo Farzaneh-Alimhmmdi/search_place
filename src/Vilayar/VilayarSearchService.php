@@ -44,27 +44,33 @@ final class VilayarSearchService
             return $pageResult;
         }
 
-        $places = [];
-        $first = true;
+        $cards = $pageResult['cards'];
+        $detailUrls = [];
+        foreach ($cards as $i => $card) {
+            $detailUrls[$i] = $card['url'];
+        }
 
-        foreach ($pageResult['cards'] as $card) {
-            // Polite pause between detail fetches (not before the first one).
-            if (!$first && $this->client->getDetailDelayMs() > 0) {
-                usleep($this->client->getDetailDelayMs() * 1000);
-            }
-            $first = false;
-
-            $phone = null;
-            $owner = null;
-
+        $details = [];
+        if ($detailUrls !== []) {
             try {
-                $detail = $this->client->fetchDetail($card['url']);
-                $phone = $detail['phone'];
-                $owner = $detail['owner'];
+                $details = $this->client->fetchDetails($detailUrls);
             } catch (\Throwable $e) {
+                Logger::warning('Vilayar batch detail fetch failed', ['error' => $e->getMessage()]);
+                foreach ($detailUrls as $i => $url) {
+                    $details[$i] = ['phone' => null, 'owner' => null, 'error' => $e->getMessage()];
+                }
+            }
+        }
+
+        $places = [];
+        foreach ($cards as $i => $card) {
+            $detail = $details[$i] ?? ['phone' => null, 'owner' => null];
+            $phone = $detail['phone'] ?? null;
+            $owner = $detail['owner'] ?? null;
+            if (!empty($detail['error'] ?? null)) {
                 Logger::warning('Vilayar detail fetch failed', [
-                    'url' => $card['url'],
-                    'error' => $e->getMessage(),
+                    'url' => $detailUrls[$i],
+                    'error' => $detail['error'],
                 ]);
             }
 

@@ -13,7 +13,6 @@ return [
         ['value' => 'اقامتگاه', 'label' => 'اقامتگاه'],
         ['value' => 'اقامتگاه-بومگردی', 'label' => 'بوم‌گردی'],
         ['value' => 'مراکز-اقامتی', 'label' => 'مراکز اقامتی'],
-        ['value' => 'متل', 'label' => 'متل'],
     ],
     // Persian province name -> Behtarino city slugs searched and merged
     'cities_file' => __DIR__ . '/behtarino/cities.json',

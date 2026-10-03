@@ -96,6 +96,114 @@ final class CurlHttpClient
     public function getLastStatusCode(): int { return $this->lastStatusCode; }
 
     /**
+     * Fetch many URLs in parallel (raw HTML, not JSON).
+     *
+     * Each detail page is small, so 8 concurrent requests is polite and fast:
+     * ~30 cards go from ~30 round-trips to ~4 batches (~6-8s instead of ~30s).
+     *
+     * @param string[] $urls    List of absolute URLs (keys are preserved).
+     * @param array    $options Same as getRaw() ['timeout' => int, 'follow' => bool]
+     * @param int      $concurrency Max simultaneous handles.
+     * @return array<string|int,array{success:bool,body:string,final_url:string,http_code:int,error:string|null}>
+     */
+    public function getRawMulti(array $urls, array $options = [], int $concurrency = 8): array
+    {
+        if ($urls === []) {
+            return [];
+        }
+
+        $concurrency = max(1, min(16, $concurrency));
+        $timeout = (int) ($options['timeout'] ?? $this->timeout);
+        $follow = array_key_exists('follow', $options) ? (bool) $options['follow'] : true;
+
+        $headerList = array_map(fn($k, $v) => "$k: $v", array_keys($this->headers), $this->headers);
+        $results = [];
+
+        // Chunk politely: never open more than $concurrency at once.
+        foreach (array_chunk($urls, $concurrency, true) as $chunk) {
+            $multi = curl_multi_init();
+            $handles = [];
+
+            foreach ($chunk as $key => $url) {
+                $ch = curl_init();
+                curl_setopt_array($ch, [
+                    CURLOPT_URL => $url,
+                    CURLOPT_RETURNTRANSFER => true,
+                    CURLOPT_TIMEOUT => $timeout,
+                    CURLOPT_CONNECTTIMEOUT => $this->connectTimeout,
+                    CURLOPT_USERAGENT => $this->userAgent,
+                    CURLOPT_FOLLOWLOCATION => $follow,
+                    CURLOPT_MAXREDIRS => 5,
+                    CURLOPT_SSL_VERIFYPEER => true,
+                    CURLOPT_HTTPHEADER => $headerList,
+                ]);
+                curl_multi_add_handle($multi, $ch);
+                $handles[(int) $ch] = ['key' => $key, 'handle' => $ch, 'url' => $url];
+            }
+
+            $running = null;
+            do {
+                $status = curl_multi_exec($multi, $running);
+                if ($running) {
+                    // Wait up to 1s for activity; avoids busy-loop.
+                    curl_multi_select($multi, 1.0);
+                }
+            } while ($running && $status === CURLM_OK);
+
+            foreach ($handles as $entry) {
+                $ch = $entry['handle'];
+                $key = $entry['key'];
+                $url = $entry['url'];
+
+                $body = (string) curl_multi_getcontent($ch);
+                $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                $finalUrl = (string) curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
+                $error = curl_error($ch);
+
+                if ($error !== '') {
+                    Logger::warning('Parallel fetch failed', ['url' => $url, 'error' => $error]);
+                    $results[$key] = [
+                        'success' => false,
+                        'body' => '',
+                        'final_url' => $url,
+                        'http_code' => $httpCode,
+                        'error' => $error,
+                    ];
+                } elseif ($httpCode >= 200 && $httpCode < 300) {
+                    $this->lastStatusCode = $httpCode;
+                    $results[$key] = [
+                        'success' => true,
+                        'body' => $body,
+                        'final_url' => $finalUrl !== '' ? $finalUrl : $url,
+                        'http_code' => $httpCode,
+                        'error' => null,
+                    ];
+                } else {
+                    $results[$key] = [
+                        'success' => false,
+                        'body' => '',
+                        'final_url' => $url,
+                        'http_code' => $httpCode,
+                        'error' => "HTTP $httpCode for $url",
+                    ];
+                }
+
+                curl_multi_remove_handle($multi, $ch);
+                curl_close($ch);
+            }
+
+            curl_multi_close($multi);
+
+            // Tiny pause between batches to stay polite.
+            if (count($results) < count($urls)) {
+                usleep(120000);
+            }
+        }
+
+        return $results;
+    }
+
+    /**
      * Perform a GET (or form POST) request and return the raw response body.
      *
      * Unlike get(), the body is NOT expected to be JSON (used for HTML pages).

@@ -44,26 +44,27 @@ final class BehtarinoSearchService
             return $pageResult;
         }
 
-        $places = [];
-        $first = true;
+        $cards = $pageResult['cards'];
+        $detailUrls = [];
+        foreach ($cards as $i => $card) {
+            $detailUrls[$i] = $card['url'];
+        }
 
-        foreach ($pageResult['cards'] as $card) {
-            // Polite pause between detail fetches (not before the first one).
-            if (!$first && $this->client->getDetailDelayMs() > 0) {
-                usleep($this->client->getDetailDelayMs() * 1000);
-            }
-            $first = false;
-
-            $phone = null;
-
+        $phones = [];
+        if ($detailUrls !== []) {
             try {
-                $phone = $this->client->fetchDetailPhone($card['url']);
+                $phones = $this->client->fetchDetailPhones($detailUrls);
             } catch (\Throwable $e) {
-                Logger::warning('Behtarino detail fetch failed', [
-                    'url' => $card['url'],
-                    'error' => $e->getMessage(),
-                ]);
+                Logger::warning('Behtarino batch detail fetch failed', ['error' => $e->getMessage()]);
+                foreach ($detailUrls as $i => $url) {
+                    $phones[$i] = null;
+                }
             }
+        }
+
+        $places = [];
+        foreach ($cards as $i => $card) {
+            $phone = $phones[$i] ?? null;
 
             $places[] = $this->formatPlace($card, $phone, $label, $category);
         }

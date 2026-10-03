@@ -147,6 +147,39 @@ final class VilayarClient
     }
 
     /**
+     * Fetch many detail pages in parallel (polite concurrency, same parses as fetchDetail).
+     *
+     * @param string[] $detailUrls Absolute detail URLs (keys preserved, order kept).
+     * @return array<int|string,array{phone: string|null, owner: string|null, error: string|null}>
+     */
+    public function fetchDetails(array $detailUrls): array
+    {
+        if ($detailUrls === []) {
+            return [];
+        }
+
+        $rawResults = $this->http->getRawMulti($detailUrls, ['timeout' => $this->detailTimeout], 8);
+        $out = [];
+
+        foreach ($detailUrls as $key => $url) {
+            $raw = $rawResults[$key] ?? null;
+
+            if (!is_array($raw) || empty($raw['success']) || ($raw['body'] ?? '') === '') {
+                $out[$key] = ['phone' => null, 'owner' => null, 'error' => $raw['error'] ?? 'fetch failed'];
+                continue;
+            }
+
+            $out[$key] = [
+                'phone' => self::parseDetailPhone($raw['body']),
+                'owner' => self::parseDetailOwner($raw['body']),
+                'error' => null,
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
      * Parse list cards from a Vilayar search page.
      *
      * @return array<int,array<string,mixed>> each: numeric_id, url, image, title,

@@ -165,6 +165,35 @@ final class BehtarinoClient
     }
 
     /**
+     * Fetch many detail pages in parallel (polite concurrency, same parses as fetchDetailPhone).
+     *
+     * @param string[] $detailUrls Absolute detail URLs (keys preserved, order kept).
+     * @return array<int|string,string|null> phone per key (null when missing/failed)
+     */
+    public function fetchDetailPhones(array $detailUrls): array
+    {
+        if ($detailUrls === []) {
+            return [];
+        }
+
+        $rawResults = $this->http->getRawMulti($detailUrls, ['timeout' => $this->detailTimeout], 8);
+        $out = [];
+
+        foreach ($detailUrls as $key => $url) {
+            $raw = $rawResults[$key] ?? null;
+
+            if (!is_array($raw) || empty($raw['success']) || ($raw['body'] ?? '') === '') {
+                $out[$key] = null;
+                continue;
+            }
+
+            $out[$key] = self::parseDetailPhone($raw['body']);
+        }
+
+        return $out;
+    }
+
+    /**
      * Parse listings from a Behtarino list page (JSON-LD ItemList).
      *
      * @return array<int,array<string,mixed>> each: external_id, url, name,

@@ -19,7 +19,6 @@ return [
         ['value' => 'apartmenthotel', 'label' => 'هتل آپارتمان'],
         ['value' => 'traditionalhouse', 'label' => 'هتل سنتی'],
         ['value' => 'complex', 'label' => 'مجتمع اقامتی'],
-        ['value' => 'hotel', 'label' => 'هتل'],
         ['value' => 'hostel', 'label' => 'مهمانپذیر'],
         ['value' => 'traditional', 'label' => 'خانه سنتی'],
     ],

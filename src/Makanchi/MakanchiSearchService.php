@@ -45,30 +45,38 @@ final class MakanchiSearchService
             return $pageResult;
         }
 
-        $places = [];
-        $first = true;
+        $cards = $pageResult['cards'];
+        $detailUrls = [];
+        foreach ($cards as $i => $card) {
+            $detailUrls[$i] = $this->endpoint . $card['href'];
+        }
 
-        foreach ($pageResult['cards'] as $card) {
-            // Polite pause between detail fetches (not before the first one).
-            if (!$first && $this->client->getDetailDelayMs() > 0) {
-                usleep($this->client->getDetailDelayMs() * 1000);
-            }
-            $first = false;
-
-            $detailUrl = $this->endpoint . $card['href'];
-            $phone = null;
-            $address = $card['city'];
-
+        $details = [];
+        if ($detailUrls !== []) {
             try {
-                $detail = $this->client->fetchDetail($detailUrl);
-                $phone = $detail['phone'];
-                if ($detail['address'] !== null) {
-                    $address = $detail['address'];
-                }
+                $details = $this->client->fetchDetails($detailUrls);
             } catch (\Throwable $e) {
+                Logger::warning('Makanchi batch detail fetch failed', ['error' => $e->getMessage()]);
+                // Fall back to per-card null phones (list still renders).
+                foreach ($detailUrls as $i => $url) {
+                    $details[$i] = ['phone' => null, 'address' => null, 'error' => $e->getMessage()];
+                }
+            }
+        }
+
+        $places = [];
+        foreach ($cards as $i => $card) {
+            $detailUrl = $detailUrls[$i];
+            $detail = $details[$i] ?? ['phone' => null, 'address' => null];
+            $phone = $detail['phone'] ?? null;
+            $address = $detail['address'] ?? null;
+            if ($address === null) {
+                $address = $card['city'];
+            }
+            if (!empty($detail['error'] ?? null)) {
                 Logger::warning('Makanchi detail fetch failed', [
                     'url' => $detailUrl,
-                    'error' => $e->getMessage(),
+                    'error' => $detail['error'],
                 ]);
             }
 
