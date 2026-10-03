@@ -492,7 +492,6 @@ final class DivarCollectController
                 $this->http,
                 (string) ($job['query'] ?? ''),
                 (string) ($job['divar_city_id'] ?? ''),
-                null,
                 (string) ($job['category'] ?? ''),
                 null
             );

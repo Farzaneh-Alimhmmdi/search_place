@@ -18,10 +18,6 @@ final class DivarSearchService
 {
     private CurlHttpClient $http;
 
-    private ?DivarAuthManager $authManager = null;
-
-    private ?DivarContactFetcher $contactFetcher = null;
-
     private string $query;
 
     /**
@@ -62,14 +58,12 @@ final class DivarSearchService
         CurlHttpClient $http,
         string $query,
         string $cityId,
-        ?DivarAuthManager $authManager = null,
         string $category = 'temporary-rent',
         ?array $bbox = null
     ) {
         $this->http = $http;
         $this->query = trim($query);
         $this->cityId = trim($cityId);
-        $this->authManager = $authManager;
         $this->category = trim($category);
         $this->bbox = $bbox;
 
