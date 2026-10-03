@@ -611,10 +611,10 @@ final class SearchView
                         <div class="form-group">
                             <label>منبع جستجو</label>
                             <select name="provider" id="providerSelect">
-                                <option value="balad" <?= ($this->provider === 'balad') ? 'selected' : '' ?>>بلد (Balad)</option>
-                                <option value="neshan" <?= ($this->provider === 'neshan') ? 'selected' : '' ?>>نشان (Neshan)</option>
-                                <option value="google_map" <?= ($this->provider === 'google_map') ? 'selected' : '' ?>>گوگلMap</option>
-                                <option value="divar" <?= ($this->provider === 'divar') ? 'selected' : '' ?>>دیوار (Divar)</option>
+                                <option value="balad" <?= ($this->provider === 'balad') ? 'selected' : '' ?>>بلد</option>
+                                <option value="neshan" <?= ($this->provider === 'neshan') ? 'selected' : '' ?>>نشان</option>
+                                <option value="google_map" <?= ($this->provider === 'google_map') ? 'selected' : '' ?>>گوگل‌مپ</option>
+                                <option value="divar" <?= ($this->provider === 'divar') ? 'selected' : '' ?>>دیوار</option>
                             </select>
                         </div>
                     </div>
@@ -712,6 +712,43 @@ final class SearchView
                     }
                 }
                 $hasPlaces = !empty($this->results['places']);
+
+                // Show the Persian category label, never the raw English slug
+                // (e.g. "مهمانسرا" instead of "guest-house").
+                $displayTitle = (string)($this->results['title'] ?? '');
+                if ($categoryLabel !== '' && $this->selectedCategory !== ''
+                    && strpos($displayTitle, $this->selectedCategory) !== false) {
+                    $displayTitle = str_replace($this->selectedCategory, $categoryLabel, $displayTitle);
+                } elseif ($displayTitle === '' && $categoryLabel !== '') {
+                    $displayTitle = $categoryLabel;
+                }
+                // Divar passes the city as an English slug (e.g. "tehran").
+                // Replace it with the Persian city name as well.
+                $slugToCityFa = [];
+                foreach ($this->allProvinceCities as $cities) {
+                    if (!is_array($cities)) {
+                        continue;
+                    }
+                    foreach ($cities as $slug => $name) {
+                        $slugToCityFa[(string)$slug] = (string)$name;
+                    }
+                }
+                foreach ($this->provinceCities as $slug => $name) {
+                    $slugToCityFa[(string)$slug] = (string)$name;
+                }
+                foreach ($this->citySlugs as $faName => $slug) {
+                    $slugToCityFa[(string)$slug] = (string)$faName;
+                }
+                $selectedCityStr = (string)$this->selectedCity;
+                if ($selectedCityStr !== '' && isset($slugToCityFa[$selectedCityStr])
+                    && strpos($displayTitle, $selectedCityStr) !== false) {
+                    $displayTitle = str_replace($selectedCityStr, $slugToCityFa[$selectedCityStr], $displayTitle);
+                }
+                $totalFa = str_replace(
+                    ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'],
+                    ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'],
+                    (string)($this->results['total'] ?? 0)
+                );
                 ?>
                 <?php if (!$hasPlaces): ?>
                     <div class="empty-state">
@@ -724,8 +761,8 @@ final class SearchView
                     </div>
                 <?php else: ?>
                     <div class="info">
-                        <strong><?= htmlspecialchars($this->results['title'] ?? '') ?></strong> -
-                        یافت شد: <?= $this->results['total'] ?> مورد
+                        <strong><?= htmlspecialchars($displayTitle) ?></strong> -
+                        یافت شد: <?= $totalFa ?> مورد
                     </div>
                     <div class="results-list">
                         <?php foreach ($this->results['places'] as $place): ?>
@@ -823,6 +860,16 @@ final class SearchView
                                     </div>
 
                                     <div class="result-actions">
+                                        <?php if ($this->provider === 'balad' && !empty($place['balad_url'])): ?>
+                                            <a href="<?= htmlspecialchars($place['balad_url']) ?>" target="_blank" class="btn-link btn-link-secondary">
+                                                مشاهده در بلد ↗
+                                            </a>
+                                        <?php elseif ($this->provider === 'neshan' && !empty($place['neshan_url'])): ?>
+                                            <a href="<?= htmlspecialchars($place['neshan_url']) ?>" target="_blank" class="btn-link btn-link-secondary">
+                                                مشاهده در نشان ↗
+                                            </a>
+                                        <?php endif; ?>
+
                                         <?php if ($showSaveButton): ?>
                                             <div class="save-place-action">
                                                 <button type="button"
@@ -843,15 +890,7 @@ final class SearchView
                                             </div>
                                         <?php endif; ?>
 
-                                        <?php if ($this->provider === 'balad' && !empty($place['balad_url'])): ?>
-                                            <a href="<?= htmlspecialchars($place['balad_url']) ?>" target="_blank" class="btn-link btn-link-secondary">
-                                                مشاهده در بلد ↗
-                                            </a>
-                                        <?php elseif ($this->provider === 'neshan' && !empty($place['neshan_url'])): ?>
-                                            <a href="<?= htmlspecialchars($place['neshan_url']) ?>" target="_blank" class="btn-link btn-link-secondary">
-                                                مشاهده در نشان ↗
-                                            </a>
-                                        <?php elseif ($this->provider === 'google_map' && !empty($place['place_id'])): ?>
+                                        <?php if ($this->provider === 'google_map' && !empty($place['place_id'])): ?>
                                             <a href="https://www.google.com/maps/search/?api=1&query=<?= urlencode($place['name'] . ' ' . ($place['address'] ?? '')) ?>" target="_blank" class="btn-link btn-link-secondary">
                                                 مشاهده در گوگل ↗
                                             </a>

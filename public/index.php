@@ -45,5 +45,5 @@ if ($route === '/divar_collect') {
     }
 } else {
     http_response_code(404);
-    echo 'You are here';
+    echo 'صفحه‌ای که دنبال آن بودید پیدا نشد.';
 }

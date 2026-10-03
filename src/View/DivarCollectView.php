@@ -792,7 +792,7 @@ final class DivarCollectView
                         done: 'پایان یافت'
                     };
 
-                    setStatus(job.status, labels[job.status] || job.status || '');
+                    setStatus(job.status, labels[job.status] || 'نامشخص');
 
                     if (barFill) {
                         barFill.className = 'bar-fill' + (job.status === 'running' ? '' : (job.status === 'done' ? ' done' : ' idle'));
@@ -801,7 +801,7 @@ final class DivarCollectView
                     if (spinner) spinner.hidden = job.status !== 'running';
 
                     if (lastMessage && batch) {
-                        lastMessage.textContent = 'آخرین صفحه: ' + batch.fetched + ' آگهی در ' + batch.elapsed_ms + 'ms';
+                        lastMessage.textContent = 'آخرین صفحه: ' + batch.fetched + ' آگهی در ' + batch.elapsed_ms + ' میلی‌ثانیه';
                     }
 
                     if (job.status === 'done' || job.status === 'paused') {

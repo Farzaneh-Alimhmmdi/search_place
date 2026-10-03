@@ -1075,7 +1075,7 @@ final class DivarController
 
             echo json_encode([
                 'success' => false,
-                'message' => 'Cookie string is required'
+                'message' => 'رشته کوکی الزامی است'
             ], JSON_UNESCAPED_UNICODE);
 
             return;
@@ -1157,7 +1157,7 @@ final class DivarController
 
             echo json_encode([
                 'success' => false,
-                'message' => 'Could not parse cookies'
+                'message' => 'کوکی‌ها قابل تفسیر نیست'
             ], JSON_UNESCAPED_UNICODE);
 
             return;
@@ -1188,7 +1188,7 @@ final class DivarController
 
         echo json_encode([
             'success' => true,
-            'message' => 'Divar cookies saved successfully',
+            'message' => 'کوکی‌های دیوار با موفقیت ذخیره شد',
             'cookie_names' => array_keys($cookies)
         ], JSON_UNESCAPED_UNICODE);
     }
@@ -1349,7 +1349,7 @@ final class DivarController
 
             echo json_encode([
                 'success' => false,
-                'message' => 'Place ID is required'
+                'message' => 'شناسه آگهی الزامی است'
             ], JSON_UNESCAPED_UNICODE);
 
             return;
@@ -1388,7 +1388,7 @@ final class DivarController
             echo json_encode([
                 'success' => false,
                 'authentication_required' => true,
-                'message' => 'Not authenticated with Divar. Please login first.'
+                'message' => 'ابتدا وارد دیوار شوید.'
             ], JSON_UNESCAPED_UNICODE);
 
             return;
@@ -1469,7 +1469,7 @@ final class DivarController
 
             echo json_encode([
                 'success' => false,
-                'message' => 'Could not encode request data'
+                'message' => 'ساخت درخواست ناموفق بود'
             ], JSON_UNESCAPED_UNICODE);
 
             return;
